@@ -90,8 +90,10 @@ def code_version() -> dict:
         return json.loads(bundled.read_text())
     def git(*args: str) -> str:
         return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
-    return {"git_sha": git("rev-parse", "--short", "HEAD") or "unknown",
-            "git_dirty": bool(git("status", "--porcelain", "--untracked-files=normal", "--", "src", "pipeline"))}
+    # only code and settings count; run outputs and figures written next to the code do not make it dirty
+    changed = git("status", "--porcelain", "--untracked-files=all", "--", "src", "pipeline").splitlines()
+    code = [line for line in changed if line.endswith((".py", ".yaml", ".yml", ".toml"))]
+    return {"git_sha": git("rev-parse", "--short", "HEAD") or "unknown", "git_dirty": bool(code)}
 
 
 def pick_device() -> torch.device:
