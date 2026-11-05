@@ -154,7 +154,10 @@ def build_arrays(c: dict[str, Any]) -> dict[str, Any]:
              (("H", H), ("dist", dist), ("U", U), ("u", u), ("v", v), ("TKE", TKE))}
     return small | {"valid": np.ascontiguousarray(valid), "angle_deg": angle, "k": k, "transposed": transposed,
                     "native_shape": np.array(c["H"].shape), "dx_native": float(c["dx"]),
-                    "wind_dir_deg": float(c["wind_dir_deg"]), "U_mean": float(np.nanmean(c["U"]))}
+                    "wind_dir_deg": float(c["wind_dir_deg"]), "U_mean": float(np.nanmean(c["U"])),
+                    # the truth on the native grid and orientation, as the evaluator scores it, so runs on
+                    # machines without the raw files (Kaggle, Colab) can still write evaluator files
+                    "U_native": np.ascontiguousarray(c["U"], dtype=np.float32)}
 
 
 @functools.lru_cache(maxsize=1)

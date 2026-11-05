@@ -81,6 +81,7 @@ def build_one(case: str) -> dict:
         "H_round_trip_exact": bool(np.array_equal(from_canonical(arrays["H"], k, t).astype(float), H)),
         "U_nan_pattern_matches": bool(np.array_equal(np.isnan(U_back), np.isnan(fields["U"]))),
         "U_float16_max_error": float(np.nanmax(np.abs(U_back - fields["U"]))),
+        "U_native_exact": bool(np.array_equal(arrays["U_native"], c["U"].astype(np.float32), equal_nan=True)),
         # the mean wind should keep the same angle to the forcing after the turn (mirrored if transposed)
         "flow_offset_native_deg": flow_offset(fields["u"], fields["v"], c["wind_dir_deg"]),
         "flow_offset_canonical_deg": flow_offset(to64["u"], to64["v"], arrays["angle_deg"]),
@@ -113,6 +114,7 @@ def cache_checks(summary: pd.DataFrame) -> dict:
         "U_mean_max_rel_diff_vs_S02": float(np.abs(summary["U_mean"].to_numpy() / targets - 1.0).max()),
         "H_round_trip_exact_all": bool(summary["H_round_trip_exact"].all()),
         "U_nan_pattern_matches_all": bool(summary["U_nan_pattern_matches"].all()),
+        "U_native_exact_all": bool(summary["U_native_exact"].all()),
         "U_float16_max_error": float(summary["U_float16_max_error"].max()),
         "flow_offset_preserved_max_gap_deg": float(offset_gap.max()),
         "flow_offset_native_abs_max_deg": float(summary["flow_offset_native_deg"].abs().max()),
@@ -125,6 +127,7 @@ def cache_checks(summary: pd.DataFrame) -> dict:
     # S02 stores 6 significant digits; a NaN (a case missing from S02) also fails, since NaN < x is False
     assert checks["U_mean_max_rel_diff_vs_S02"] < 1e-5, "case means differ from S02"
     assert checks["H_round_trip_exact_all"] and checks["U_nan_pattern_matches_all"], "round trip failed"
+    assert checks["U_native_exact_all"], "the stored native truth differs from the loader"
     assert checks["flow_offset_preserved_max_gap_deg"] < 0.5, "the wind components were not turned with the field"
     return checks
 
