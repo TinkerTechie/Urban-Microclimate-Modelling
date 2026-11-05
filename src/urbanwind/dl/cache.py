@@ -43,7 +43,7 @@ from urbanwind.features import compute_periodic_distance_transform
 from urbanwind.splits import load_splits
 
 CACHE_DIR = DATA_DIR / "processed" / "dl"
-CACHE_VERSION = 1  # bump when the cached arrays change, so an old copy fails loudly
+CACHE_VERSION = 2  # bump when the cached arrays change, so an old copy fails loudly (2: U_native added)
 FINE_DX = 0.5
 H_SCALE = 16.0  # metres; brings building height and wall distance to order 1
 DIST_SCALE = 16.0

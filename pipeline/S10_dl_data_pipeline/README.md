@@ -79,7 +79,7 @@ Only the building raster and the wind direction go in. The target is U/u* (each 
 | Angle between the mean wind and the forcing, before and after the turn | the same for every case (largest gap 0.002°), mirrored for transposed cases |
 | Case means against S02 | agree to the 6 significant digits S02 stores |
 | 1,000 batches of 16 patches | all load with finite inputs and targets; 56.8% of patch cells carry loss on average (at least 48.6% in a batch); no patch without loss cells |
-| Speed | the cache builds in 26 s on 6 cores and the whole script runs in 50 s (recorded while a training run shared the machine); loading all cases into a `PatchDataset` takes 3.8 s and holds about 0.7 GB; drawing one batch takes 0.020 s |
+| Speed | the cache builds in 20 s on 8 cores and the whole script runs in 52 s; loading all cases into a `PatchDataset` takes 5.0 s and holds about 0.7 GB; drawing one batch takes 0.025 s (recorded run) |
 
 The unit tests check each transform and its inverse for all 8 symmetries of the square, the remaining angle for every development direction, the 2×2 resampling on a hand-made example, the mirror against the inputs of the mirrored case, wrap-around and tiling crops, that patches do not depend on the order of the cases, the fill, and `predict_native` and `predict_arrays` on synthetic and real cases.
 
