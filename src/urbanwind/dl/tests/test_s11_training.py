@@ -124,7 +124,7 @@ def test_a_stopped_fold_resumes_exactly_where_it_left_off(tmp_path, monkeypatch)
     cpu = torch.device("cpu")
     straight, _ = train.fit_fold(cfg, 0, cases[:2], cases[2:], cpu, tmp_path / "a.pt")
 
-    def crash_after_first_epoch(epoch, val_l1):
+    def crash_after_first_epoch(epoch, val):
         if epoch == 1:
             raise KeyboardInterrupt  # stands in for a restart or a closed laptop
     with pytest.raises(KeyboardInterrupt):

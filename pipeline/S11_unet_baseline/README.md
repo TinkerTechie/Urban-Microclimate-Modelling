@@ -5,10 +5,10 @@ Trains a convolutional network that predicts the pedestrian-level wind speed U/u
 | | |
 | --- | --- |
 | Inputs | the S10 cache (`data/processed/dl/`), `data/splits.json` |
-| Outputs | `results/preds/<exp_id>/<case>.npz` and `results/checkpoints/<exp_id>/` (not tracked); `outputs/runs/<exp_id>/fold<k>.json` and `.csv`; `outputs/summary.csv`, `outputs/vs_s07.csv`, figures |
+| Outputs | `results/preds/<exp_id>/<case>.npz` and `results/checkpoints/<exp_id>/` (not tracked); `outputs/runs/<exp_id>/fold<k>.json` and `.csv`; `outputs/optuna/` (the tuning study); `outputs/summary.csv`, `outputs/vs_s07.csv`, figures |
 | Code | `src/urbanwind/dl/nets.py`, `losses.py`, `train.py`, `datasets.py`; `configs/`, `overfit_check.py`, `tune_optuna.py`, `s11_results.py`, `kaggle_runner.py`; tests in `src/urbanwind/dl/tests/` |
 
-Status: the code is complete and tested. The final results (tuned settings, three seeds, five folds, and the random-split comparison) follow in a second pull request that closes #35. The fold-0 result below is preliminary.
+Status: the code is complete and tested, and the settings are tuned (see Tuning below). The final results (three seeds, five folds, and the random-split comparison) follow in a second pull request that closes #35. The fold-0 result below is preliminary.
 
 ## Network
 
@@ -89,6 +89,26 @@ The cache stores the native-grid truth, so the evaluator files can be written wi
 - **Workers:** several can share one study, one per GPU.
 - **Deadline:** a trial cut short is recorded as pruned and is never ranked.
 - **Optimism:** the inner-validation cases it tunes on are scored in folds 1 to 4. The tuned five-fold result is therefore slightly optimistic, and the frozen test set gives the clean number.
+
+**The study.** Run on Kaggle with two T4 workers for 4.9 hours. It ran 33 trials: 17 complete and 16 pruned. All trials are in `outputs/optuna/trials.csv`, and the best trial is in `outputs/optuna/best.json`.
+
+| Trial | Base width, depth | Learning rate | Weight decay | Dropout | Context, loss | Score (balanced RMSE, u*) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 15, the best | 24, 4 | 3.64e-4 | 6.5e-5 | 0.079 | 256/16, L1 | 0.691 |
+| 0, the defaults | 32, 4 | 1.0e-3 | 1.0e-4 | 0.10 | 256/16, L1 | 0.726 |
+
+- **What the study found.**
+  - The eight best trials all use base width 24, 256/16 context and the L1 loss, and seven of them use depth 4.
+  - They score between 0.691 and 0.697. Their learning rates span 3.1e-4 to 5.8e-4, and their dropout spans 0 to 0.08.
+  - The score is flat across this range, so nothing suggests a better learning rate below the searched range (which starts at 3e-4).
+- **Final settings.** `configs/unet_tuned.yaml` takes trial 15, rounded to two significant figures, and trains for the full 100 epochs. The network has 4,860,313 parameters and takes about 38 s per epoch on a T4.
+- **Leakage comparison.** `configs/unet_tuned_random.yaml` uses the same settings on a random five-fold split.
+- **Caveat.** Only three trials paired a wider network with a learning rate in the chosen range:
+  - width 32: pruned after 8 epochs, while its score was still within the range of the width-24 trials at the same epoch;
+  - width 48: pruned after 7 epochs;
+  - width 48 with depth 5 and the MSE loss: completed, with a score of 0.751.
+
+  So the study does not show that width 24 beats width 32 at these learning rates. It shows only that the chosen setting is the best it found, and it is the cheaper one.
 
 ## Interfaces for later stages
 

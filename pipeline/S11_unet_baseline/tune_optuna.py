@@ -121,7 +121,7 @@ def save_progress(study: optuna.Study, out: pathlib.Path) -> None:
     done = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
     if done:
         best = min(done, key=lambda t: t.value)
-        _write(out / "best.json", json.dumps({"trial": best.number, "val_l1": best.value, "params": best.params,
+        _write(out / "best.json", json.dumps({"trial": best.number, "val_rmse": best.value, "params": best.params,
                                               "n_trials": len(study.trials), "n_complete": len(done)}, indent=2))
 
 
