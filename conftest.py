@@ -9,8 +9,10 @@ On Linux, including CI, everything runs in one process as usual.
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import pathlib
+import shlex
 import subprocess
 import sys
 
@@ -20,11 +22,35 @@ DL_TESTS = pathlib.Path(__file__).resolve().parent / "src" / "urbanwind" / "dl" 
 CHILD = "URBANWIND_DL_TESTS_ONLY"
 DEFERRED = pytest.StashKey[list]()  # targets for the second process; set only when the run is split
 OPTIONS = pytest.StashKey[list]()
+SESSION = pytest.StashKey[pytest.Session]()
+# options that name an output file or folder: the second process would overwrite the first one's
+NOT_FORWARDED = ("--junitxml", "--junit-xml", "--basetemp", "--resultlog", "--report-log")
 
 
 def _in_dl_tests(path: pathlib.Path) -> bool:
     path = path.resolve()
     return path == DL_TESTS or DL_TESTS in path.parents
+
+
+def _user_ignores_dl_tests(config) -> bool:
+    root = config.invocation_params.dir
+    ignored = [(root / p).resolve() for p in config.getoption("ignore") or []]
+    globs = config.getoption("ignore_glob") or []
+    return any(DL_TESTS == p or p in DL_TESTS.parents for p in ignored) or any(
+        fnmatch.fnmatch(str(DL_TESTS), str(root / g)) for g in globs)
+
+
+def _forwarded(args: list[str], given: set[str]) -> list[str]:
+    """The command-line options for the second process: no test paths and no output files."""
+    out, skip_next = [], False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+        elif arg.split("=")[0] in NOT_FORWARDED:
+            skip_next = "=" not in arg
+        elif arg not in given:
+            out.append(arg)
+    return out
 
 
 def pytest_configure(config):
@@ -38,8 +64,14 @@ def pytest_configure(config):
     # PyTorch paths are taken out of the arguments here
     given = set(config.args) if config.args_source == pytest.Config.ArgsSource.ARGS else set()
     config.args[:] = [arg for arg in config.args if arg not in dl]
+    # pytest does not apply --ignore to testpaths, so an ignored PyTorch folder is dropped here too
+    if _user_ignores_dl_tests(config):
+        return
     config.stash[DEFERRED] = dl
-    config.stash[OPTIONS] = [arg for arg in config.invocation_params.args if arg not in given]
+    # PYTEST_ADDOPTS is passed on explicitly and removed from the child's environment, so a path in
+    # it cannot pull the other tests into the PyTorch process
+    addopts = shlex.split(os.environ.get("PYTEST_ADDOPTS", ""))
+    config.stash[OPTIONS] = _forwarded([*addopts, *config.invocation_params.args], given)
 
 
 def pytest_ignore_collect(collection_path, config):
@@ -52,14 +84,25 @@ def pytest_ignore_collect(collection_path, config):
     return True
 
 
-def pytest_sessionfinish(session):
-    config = session.config
-    deferred = config.stash.get(DEFERRED, None)
-    if not deferred or session.exitstatus == pytest.ExitCode.INTERRUPTED:
+def pytest_sessionstart(session):
+    session.config.stash[SESSION] = session
+
+
+def pytest_unconfigure(config):
+    # runs after the main run's summary, so the last lines on screen are the PyTorch tests' result
+    deferred, session = config.stash.get(DEFERRED, None), config.stash.get(SESSION, None)
+    if not deferred or session is None:
+        return
+    if session.exitstatus == pytest.ExitCode.INTERRUPTED or session.shouldfail:  # Ctrl-C, or -x/--maxfail hit
         return
     print("\n\nPyTorch tests, in their own process (see conftest.py):", flush=True)
     argv = [sys.executable, "-m", "pytest", *config.stash[OPTIONS], *deferred]
-    child = subprocess.run(argv, cwd=config.invocation_params.dir, env={**os.environ, CHILD: "1"}).returncode
+    env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"} | {CHILD: "1"}
+    child = subprocess.run(argv, cwd=config.invocation_params.dir, env=env).returncode
+    main = int(session.exitstatus)
     # "no tests ran" (5) on one side is no result; any failure on either side fails the run
-    if session.exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED or (session.exitstatus == 0 and child != 5):
+    if main == pytest.ExitCode.NO_TESTS_COLLECTED or (main == 0 and child != pytest.ExitCode.NO_TESTS_COLLECTED):
         session.exitstatus = child
+    status = int(session.exitstatus)
+    verdict = {0: "all passed", 5: "no tests ran"}.get(status, f"FAILED (exit code {status})")
+    print(f"\nWhole run (main tests and PyTorch tests): {verdict}", flush=True)
