@@ -52,7 +52,7 @@ Only the building raster and the wind direction go in. The target is U/u* (each 
 2. Predict, give every building cell the prediction of the nearest open cell (see below), crop back, undo the transform, and copy each 1 m value to its four sub-cells for 0.5 m cases.
 3. The result lines up cell by cell with `load_case(case)["U"]`, so `urbanwind.evaluate` scores exactly the same cells as S07.
 
-**Why the fill.** In a 0.5 m case, a 1 m block that straddles a wall counts as a building, so the loss never trains the network there, yet the block still holds open 0.5 m sub-cells that the evaluator scores. Such cells exist in 97 of the 194 cases at 0.5 m: about 2% of a case's scored cells on average (median 0.05%, at most 13.3% in VA64-CL-28_d00). They lie next to walls, so they take the prediction of the nearest open cell rather than the untrained output. The fill uses the building map only, never the simulation, so it works the same for test cases. In 1 m cases it touches no scored cell.
+**Why the fill.** In a 0.5 m case, a 1 m block that straddles a wall counts as a building, so the loss never trains the network there, yet the block still holds open 0.5 m sub-cells that the evaluator scores. Such cells exist in 97 of the 194 cases at 0.5 m; in those 97 they are 3.9% of a case's scored cells on average (median 1.3%, at most 13.3% in VA64-CL-28_d00). They lie next to walls, so they take the prediction of the nearest open cell rather than the untrained output. The fill uses the building map only, never the simulation, so it works the same for test cases. In 1 m cases it touches no scored cell.
 
 ## Interfaces
 
@@ -78,7 +78,7 @@ Only the building raster and the wind direction go in. The target is U/u* (each 
 | Angle between the mean wind and the forcing, before and after the turn | the same for every case (largest gap 0.002°), mirrored for transposed cases |
 | Case means against S02 | agree to the 6 significant digits S02 stores |
 | 1,000 batches of 16 patches | all load with finite inputs and targets; 56.8% of patch cells carry loss on average (at least 48.6% in a batch); no patch without loss cells |
-| Speed | the cache builds in under 20 s on 8 cores; loading all cases into a `PatchDataset` takes 2.7 s and holds about 0.7 GB; drawing one batch takes 0.016 s (recorded run) |
+| Speed | the cache builds in 14 s on 8 cores and the whole script runs in 35 s; loading all cases into a `PatchDataset` takes 2.6 s and holds about 0.7 GB; drawing one batch takes 0.017 s (recorded run) |
 
 The unit tests check each transform and its inverse for all 8 symmetries of the square, the remaining angle for every development direction, the 2×2 resampling on a hand-made example, the mirror against the inputs of the mirrored case, wrap-around and tiling crops, that patches do not depend on the order of the cases, the fill, and `predict_native` and `predict_arrays` on synthetic and real cases.
 
@@ -87,7 +87,7 @@ The unit tests check each transform and its inverse for all 8 symmetries of the 
 - **The mean pedestrian wind often runs against the forcing.** In 41 development cases (21 idealized, 20 realistic) the mean of (u, v) at 1.75 m points more than 90° away from the forcing direction. This is physical, not a sign error: for 32 of the 33 such cases at 0°, the plane-averaged profile u at 1.75 m is negative as well, and it turns positive higher up. Near the ground the air in the streets circulates back against the wind above. Anything that uses u and v should expect this.
 - **The `v` column of the profile CSV files is not a signed mean.** At 1.75 m it is positive in all 482 cases, even at 0°, where the mean v at pedestrian level is close to zero. The profile `u` column does agree with the pedestrian-level mean u (correlation at least 0.998 within each of the six directions that have more than two cases).
 - **PyTorch and LightGBM do not mix in one process on macOS.** Each loads its own copy of the OpenMP runtime, and a process that uses both hangs or crashes (seen with PyTorch 2.15.0 and LightGBM 4.7.0). Tests that import PyTorch therefore go in `src/urbanwind/dl/tests/`; on macOS the root `conftest.py` runs that folder in a second pytest process, so `uv run pytest -q` still runs everything. A script that needs both, such as a hybrid of a tree model and a network, should run them in separate processes on macOS. On Linux, including CI, all tests run in one process.
-- **Most cases share three directions.** After the turn, 437 of 482 cases blow at exactly 0° or 45°. Only 5 cases need the transpose, so the angle channels carry little variety; the mirror adds the negative angles.
+- **Most cases share two angles.** After the turn, 437 of 482 cases blow at exactly 0° or 45°. Only 5 cases need the transpose, so the angle channels carry little variety; the mirror adds the negative angles.
 
 ## Figures
 

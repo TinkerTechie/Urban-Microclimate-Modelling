@@ -232,18 +232,21 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
     FIG.mkdir(parents=True, exist_ok=True)
+    start = time.time()
     cases = dev_cases().index.tolist()
     summary = build_all(cases, args.workers)
+    build_s = time.time() - start
     summary.to_csv(OUT / "cache_summary.csv", index=False, float_format="%.6g")
     checks = cache_checks(summary)
     t0 = time.time()
     ds = PatchDataset(cases, seed=0)
     checks["loader"] = {"dataset_load_s": round(time.time() - t0, 1)} | loader_check(ds)
-    (OUT / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
-    print(json.dumps(checks, indent=2))
     plot_canonical_frame()
     plot_wind_angles(summary)
     plot_sample_patches(ds)
+    checks["timing"] = {"workers": args.workers, "build_s": round(build_s, 1), "script_s": round(time.time() - start, 1)}
+    (OUT / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")
+    print(json.dumps(checks, indent=2))
 
 
 if __name__ == "__main__":
