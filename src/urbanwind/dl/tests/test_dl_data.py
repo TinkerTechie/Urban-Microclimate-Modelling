@@ -16,7 +16,8 @@ from urbanwind.dl.cache import (CACHE_DIR, CACHE_VERSION, H_SCALE, SIN_CHANNEL, 
                                 build_case, canonical_transform, dev_cases, from_canonical, load_cached,
                                 make_inputs, resample_to_1m, to_canonical, vector_to_canonical, with_inputs,
                                 write_case)
-from urbanwind.dl.datasets import PatchDataset, mirror_patch, padded_size, predict_arrays, predict_native, wrap_window
+from urbanwind.dl.datasets import (MARGIN, PatchDataset, fill_buildings, mirror_patch, padded_size, predict_arrays,
+                                   predict_canonical, predict_native, upsample2_periodic, wrap_window)
 from urbanwind.features import compute_periodic_distance_transform
 from urbanwind.splits import load_splits
 
@@ -147,6 +148,10 @@ def test_cached_case_turns_back_into_the_loader_fields(fake_cache):
     assert np.array_equal(np.isnan(back), np.isnan(native["U"]))
     assert np.allclose(back, native["U"], atol=2e-3, equal_nan=True)  # float16 storage
     assert np.isfinite(cached["y"]).all() and cached["x"].shape == (5, *cached["valid"].shape)
+    # the native-grid truth the evaluator scores against is stored exactly, for both grid spacings
+    for name in ("city_1m", "small_05m"):
+        assert np.array_equal(load_cached(name, cache_dir)["U_native"], cases[name]["U"].astype(np.float32),
+                              equal_nan=True)
 
 
 def test_mirror_equals_the_inputs_of_the_mirrored_case():
@@ -160,6 +165,15 @@ def test_mirror_equals_the_inputs_of_the_mirrored_case():
     assert np.allclose(x_m, expected, atol=1e-6)
     assert x_m[SIN_CHANNEL].max() < 0
     assert np.array_equal(y_m, y[::-1]) and np.array_equal(mask_m, mask[::-1])
+
+
+def test_periodic_bilinear_upsampling():
+    rng = np.random.default_rng(3)
+    a = rng.random((6, 10))
+    tiled = torch.nn.functional.interpolate(torch.from_numpy(np.tile(a, (3, 3)))[None, None], scale_factor=2,
+                                            mode="bilinear", align_corners=False)[0, 0].numpy()
+    assert np.allclose(upsample2_periodic(a), tiled[12:24, 20:40])  # the middle tile: no edge effects
+    assert np.allclose(upsample2_periodic(np.full((4, 6), 2.5)), 2.5)
 
 
 def test_wrap_window_wraps_and_tiles():
@@ -225,9 +239,12 @@ def test_predict_native_returns_the_native_grid(fake_cache):
     model = height_model()
     H_city = predict_native(model, "city_1m", cache_dir, fill=False)
     assert np.array_equal(H_city, cases["city_1m"]["H"])
-    H_small = predict_native(model, "small_05m", cache_dir, fill=False)
+    H_small = predict_native(model, "small_05m", cache_dir, fill=False, upsample="copy")
     blocks = cases["small_05m"]["H"].reshape(40, 2, 60, 2).max(axis=(1, 3))
     assert np.array_equal(H_small, blocks.repeat(2, axis=0).repeat(2, axis=1))
+    # the default spreads the 1 m field over the 0.5 m grid by periodic bilinear interpolation
+    smooth = predict_native(model, "small_05m", cache_dir, fill=False)
+    assert np.allclose(smooth, upsample2_periodic(blocks), atol=1e-4)
     # open_model gives 0 on 1 m blocks that hold a building; some of their 0.5 m sub-cells are scored
     raw = predict_native(open_model(), "small_05m", cache_dir, fill=False)
     scored = np.isfinite(cases["small_05m"]["U"])
@@ -237,10 +254,13 @@ def test_predict_native_returns_the_native_grid(fake_cache):
     # a case built in memory (how final scoring handles test cases) gives the same answer as the cache
     in_memory = with_inputs(build_arrays(cases["small_05m"]))
     assert np.array_equal(predict_arrays(open_model(), in_memory), filled)
-    assert np.array_equal(predict_arrays(height_model(), in_memory, fill=False), H_small)
-    for n in (40, 60, 280, 1152):
+    assert np.array_equal(predict_arrays(height_model(), in_memory, fill=False, upsample="copy"), H_small)
+    for n in (40, 60, 256, 280, 1150, 1152):
         before, total = padded_size(n)
-        assert total % 16 == 0 and before >= 64 and total - n - before >= 64
+        if n % 16 == 0:  # already periodic for the network: no padding at all
+            assert (before, total) == (0, n)
+        else:
+            assert total % 16 == 0 and before >= MARGIN and total - n - before >= MARGIN
 
 
 # ---------------------------------------------------------------------------
@@ -263,5 +283,78 @@ def test_real_cached_case_matches_the_loader():
         assert np.nanmax(np.abs(back - fields["U"])) < 1e-2
         # the prediction lands on the native grid of the raw files, cell by cell
         expected = H if np.isclose(c["dx"], 1.0) else H.repeat(2, axis=0).repeat(2, axis=1)
-        assert np.array_equal(predict_native(height_model(), case, fill=False), expected)
+        assert np.array_equal(predict_native(height_model(), case, fill=False, upsample="copy"), expected)
         assert (predict_native(open_model(), case) == 1).all()
+
+
+def periodic_conv() -> torch.nn.Module:
+    torch.manual_seed(0)
+    return torch.nn.Conv2d(5, 1, 3, padding=1, padding_mode="circular", bias=False).eval()
+
+
+@pytest.mark.parametrize("shape", [(40, 60), (96, 128), (150, 230)])
+def test_whole_and_tiled_prediction_equal_the_periodic_answer(shape):
+    # a 3x3 circular convolution has an exact answer on a periodic domain: convolve the domain itself
+    rng = np.random.default_rng(4)
+    c = {"x": rng.random((5, *shape)).astype(np.float32), "angle_deg": 10.0}
+    model = periodic_conv()
+    with torch.no_grad():
+        truth = model(torch.from_numpy(c["x"])[None])[0, 0].numpy()
+    whole = predict_canonical(model, c, "cpu", fill=False)
+    tiled = predict_canonical(model, c, "cpu", fill=False, window=64, border=8)
+    assert np.allclose(whole, truth, atol=1e-5) and np.allclose(tiled, truth, atol=1e-5)
+
+
+def test_symmetry_averaging_keeps_a_symmetric_answer():
+    # the height model just returns the heights, so every symmetric copy, turned back, gives the same field
+    rng = np.random.default_rng(5)
+    H = np.where(rng.random((64, 80)) < 0.2, 9.0, 0.0)
+    for angle in (45.0, 20.0):  # 45 degrees adds the transpose to the mirror
+        c = {"x": make_inputs(H, compute_periodic_distance_transform(H, dx=1.0)[0], angle), "angle_deg": angle}
+        plain = predict_canonical(height_model(), c, "cpu", fill=False)
+        averaged = predict_canonical(height_model(), c, "cpu", fill=False, mirror_tta=True)
+        assert np.allclose(plain, H) and np.allclose(averaged, H)
+
+
+def test_fill_reaches_across_the_periodic_edge():
+    pred = np.arange(30, dtype=float).reshape(5, 6)
+    buildings = np.zeros((5, 6), bool)
+    buildings[:, 0:3] = True  # a wall three columns wide: column 0's nearest open cell is column 5, across the edge
+    filled = fill_buildings(pred, buildings)
+    assert np.array_equal(filled[:, 0], pred[:, 5]) and np.array_equal(filled[:, 3:], pred[:, 3:])
+
+
+def test_45_degree_patches_are_sometimes_transposed(tmp_path):
+    rng = np.random.default_rng(6)
+    write_fake(tmp_path, "at45", fake_case(rng, 120, 100, 1.0, 45.0))
+    write_fake(tmp_path, "at30", fake_case(rng, 120, 100, 1.0, 30.0))
+    plain = PatchDataset(["at45"], patch=32, mirror=False, border=0, cache_dir=tmp_path, transpose45=False)
+    turned = PatchDataset(["at45"], patch=32, mirror=False, border=0, cache_dir=tmp_path)
+    kinds = []
+    for i in range(20):
+        a, b = plain[i][0], turned[i][0]
+        kinds.append("same" if torch.equal(a, b) else "T" if torch.equal(a.transpose(-2, -1), b) else "other")
+    assert set(kinds) == {"same", "T"}
+    other = PatchDataset(["at30"], patch=32, mirror=False, border=0, cache_dir=tmp_path)
+    other_plain = PatchDataset(["at30"], patch=32, mirror=False, border=0, cache_dir=tmp_path, transpose45=False)
+    assert all(torch.equal(other[i][0], other_plain[i][0]) for i in range(10))  # never at other angles
+
+
+def test_45_degree_copies_are_all_valid_symmetries(tmp_path):
+    # with the mirror on as well, a 45-degree patch may be transposed and then mirrored, never the other
+    # way round (that would point the wind at 135 degrees); the sine channel must match the rows' flip
+    rng = np.random.default_rng(7)
+    write_fake(tmp_path, "at45", fake_case(rng, 120, 100, 1.0, 45.0))
+    base = PatchDataset(["at45"], patch=32, mirror=False, border=0, cache_dir=tmp_path, transpose45=False)
+    full = PatchDataset(["at45"], patch=32, mirror=True, border=0, cache_dir=tmp_path)
+    seen = set()
+    for i in range(40):
+        p0, p1 = base[i][0].numpy(), full[i][0].numpy()
+        sin_sign = np.sign(p1[SIN_CHANNEL, 0, 0])
+        valid = {"plain": (p0, 1), "T": (np.swapaxes(p0, -2, -1), 1), "M": (p0[:, ::-1], -1),
+                 "TM": (np.swapaxes(p0, -2, -1)[:, ::-1], -1)}
+        match = [k for k, (ref, sign) in valid.items()
+                 if np.allclose(p1[[0, 1, 2]], ref[[0, 1, 2]]) and sin_sign == sign]
+        assert match, f"patch {i} is not a valid symmetric copy"
+        seen.add(match[0])
+    assert seen == {"plain", "T", "M", "TM"}
