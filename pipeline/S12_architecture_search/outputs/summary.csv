@@ -1,0 +1,1 @@
+model,seed,parameters,gpu_minutes,pooled_r2,median_case_r2_all,median_case_r2_idealized,median_case_r2_realistic,mean_delta_p95,inference_sec_per_case
