@@ -94,6 +94,7 @@ def pytest_unconfigure(config):
     if not deferred or session is None:
         return
     if session.exitstatus == pytest.ExitCode.INTERRUPTED or session.shouldfail:  # Ctrl-C, or -x/--maxfail hit
+        print("\n\nPyTorch tests not run: the main run stopped early (see conftest.py)", flush=True)
         return
     print("\n\nPyTorch tests, in their own process (see conftest.py):", flush=True)
     argv = [sys.executable, "-m", "pytest", *config.stash[OPTIONS], *deferred]

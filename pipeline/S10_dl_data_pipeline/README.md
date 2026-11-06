@@ -5,7 +5,7 @@ Turns every development case into network-ready arrays on one 1 m grid and in on
 | | |
 | --- | --- |
 | Inputs | raw case files through `urbanwind.data.load_case`; `data/splits.json` |
-| Outputs | `data/processed/dl/<case>.npz` (not tracked, 557 MB), `outputs/cache_summary.csv`, `outputs/checks.json`, figures |
+| Outputs | `data/processed/dl/<case>.npz` (not tracked, 873 MB), `outputs/cache_summary.csv`, `outputs/checks.json`, figures |
 | Code | `src/urbanwind/dl/cache.py`, `src/urbanwind/dl/datasets.py`, `build_cache.py`; tests in `src/urbanwind/dl/tests/test_dl_data.py` |
 
 ## Method
@@ -59,7 +59,7 @@ Only the building raster and the wind direction go in. The target is U/u* (each 
 | Call | Returns |
 | --- | --- |
 | `dev_cases()` | the 482 development cases with `subset`, `split_group`, `status` and outer `fold` |
-| `load_cached(case)` | `x` (5 × ny × nx float32), `y`, `valid`, `subset`, `split_group`, `fold`, `U_mean`, `angle_deg`, `k`, `transposed`, and the stored `H`, `dist`, `U`, `u`, `v`, `TKE` in the canonical frame |
+| `load_cached(case)` | `x` (5 × ny × nx float32), `y`, `valid`, `subset`, `split_group`, `fold`, `U_mean`, `angle_deg`, `k`, `transposed`, the stored `H`, `dist`, `U`, `u`, `v`, `TKE` in the canonical frame, and `U_native`, the float32 truth on the native grid and orientation that the evaluator scores against |
 | `read_cached(case)` | the stored arrays only, without `x` and `y` |
 | `PatchDataset(cases, patch=256, mirror=True, seed=0)` | `(x, y, mask)` tensors of shape `[5, P, P]`, `[1, P, P]` and `[1, P, P]`; set `dataset.epoch` before each epoch, and leave the DataLoader's `persistent_workers` off so workers see it |
 | `predict_native(model, case)` | U/u* on the native grid for a cached development case, ready for the evaluator's field format |
@@ -75,10 +75,11 @@ Only the building raster and the wind direction go in. The target is U/u* (each 
 | Test groups in the cache | 0 |
 | Height field turned back to the raw orientation | identical to the loader's 1 m height for all 482 cases |
 | Wind field turned back | the same missing cells as the loader for all 482 cases; largest float16 difference 0.0039 u* |
+| Native-grid truth (`U_native`) | identical to the loader's field for all 482 cases, so runs without the raw files (Kaggle, Colab) can still write evaluator files |
 | Angle between the mean wind and the forcing, before and after the turn | the same for every case (largest gap 0.002°), mirrored for transposed cases |
 | Case means against S02 | agree to the 6 significant digits S02 stores |
 | 1,000 batches of 16 patches | all load with finite inputs and targets; 56.8% of patch cells carry loss on average (at least 48.6% in a batch); no patch without loss cells |
-| Speed | the cache builds in 14 s on 8 cores and the whole script runs in 35 s; loading all cases into a `PatchDataset` takes 2.6 s and holds about 0.7 GB; drawing one batch takes 0.017 s (recorded run) |
+| Speed | the cache builds in 20 s on 8 cores and the whole script runs in 52 s; loading all cases into a `PatchDataset` takes 5.0 s and holds about 0.7 GB; drawing one batch takes 0.025 s (recorded run) |
 
 The unit tests check each transform and its inverse for all 8 symmetries of the square, the remaining angle for every development direction, the 2×2 resampling on a hand-made example, the mirror against the inputs of the mirrored case, wrap-around and tiling crops, that patches do not depend on the order of the cases, the fill, and `predict_native` and `predict_arrays` on synthetic and real cases.
 
