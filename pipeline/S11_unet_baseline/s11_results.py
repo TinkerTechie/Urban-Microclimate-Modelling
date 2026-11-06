@@ -3,12 +3,16 @@ S11 results: score every finished U-Net run against S07 and draw the figures.
 
 For each run (one training seed, five folds) it reads the out-of-fold fields in results/preds,
 computes the same per-case and pooled metrics as S07, adds the mean absolute error in m/s (the
-U/u* error times each case's u*), and compares with the S07 pixel model case by case.
+U/u* error times each case's u*), and compares with the S07 pixel model case by case. A run's split
+(grouped, or random for the leakage comparison) comes from the config whose settings hash its folds
+recorded. Only grouped runs are compared with S07, which was scored on the same grouped folds.
 
 Outputs
 - outputs/per_case_metrics.csv   one row per run and case
 - outputs/summary.csv            one row per run and subset (also without the flagged cases), with S07
-- outputs/vs_s07.csv             each run minus S07, with 95% group-bootstrap intervals, cases and folds won
+- outputs/vs_s07.csv             each grouped run minus S07, with 95% group-bootstrap intervals, cases and folds won
+- outputs/fold0_versions.csv     fold 0's scored cases only: the first recipe, the fixed code with the default
+                                 settings (both fold 0 only), each tuned run and S07
 - outputs/run_settings.json      the settings, prediction method and code each run's five folds share
 - outputs/figures/learning_curves.png, error_maps_realistic.png, per_case_vs_s07.png
 
@@ -28,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 from urbanwind.dl.cache import dev_cases
+from urbanwind.dl.train import config_hash, fold_table, load_config
 from urbanwind.metrics import case_metrics
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -37,6 +42,7 @@ PREDS = REPO / "results" / "preds"
 S07 = REPO / "pipeline" / "S07_pixel_model" / "outputs"
 SUBSETS = ("all", "idealized", "realistic")
 BASELINES = ("s07_pixel_gbm", "s07_level_oracle")  # scored from their saved fields, so m/s errors exist too
+FOLD0_ONLY = ("s11_unet_v1_seed0", "s11_unet_seed0")  # fold 0 only: the first recipe, and the fixed code with defaults
 
 
 def finished_runs() -> list[str]:
@@ -46,7 +52,18 @@ def finished_runs() -> list[str]:
                   and len(list((PREDS / d.name).glob("*.npz"))) == n_cases)
 
 
+def run_split(run: str) -> str:
+    """'grouped' or 'random': the split of the config in configs/ whose settings hash the run recorded."""
+    recorded = json.loads((RUNS / run / "fold0.json").read_text())["config_hash"]
+    for path in sorted((STAGE / "configs").glob("*.yaml")):
+        cfg = load_config(path)
+        if config_hash(cfg) == recorded:
+            return cfg["split"]
+    raise ValueError(f"{run}: no config in configs/ has its settings hash {recorded}")
+
+
 def score_run(run: str, dev: pd.DataFrame) -> pd.DataFrame:
+    """Per-case metrics; ``dev`` gives each case's outer fold under the run's own split."""
     rows = []
     for path in sorted((PREDS / run).glob("*.npz")):
         with np.load(path) as f:
@@ -75,7 +92,8 @@ def summarise(per_case: pd.DataFrame) -> pd.DataFrame:
         for subset in (*SUBSETS, "all, without flagged"):
             sub = {"all": by_run, "all, without flagged": by_run[~by_run["flagged"]]}.get(
                 subset, by_run[by_run["subset"] == subset])
-            rows.append({"variant": run, "subset": subset, "n_cases": len(sub), "pooled_r2": pooled_r2(sub),
+            rows.append({"variant": run, "split": by_run["split"].iloc[0], "subset": subset, "n_cases": len(sub),
+                         "pooled_r2": pooled_r2(sub),
                          "median_within_case_r2": sub["r2"].median(), "mean_mae": sub["mae"].mean(),
                          "mean_mae_ms": sub["mae_ms"].mean(), "median_nrmse": sub["nrmse"].median(),
                          "median_corr": sub["corr"].median(), "mean_delta_p95": sub["delta_p95"].mean(),
@@ -85,17 +103,21 @@ def summarise(per_case: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_learning_curves(runs: list[str]) -> None:
-    fig, axes = plt.subplots(1, len(runs), figsize=(6 * len(runs), 4), squeeze=False)
-    for ax, run in zip(axes[0], runs):
+    rows = (len(runs) + 1) // 2
+    fig, axes = plt.subplots(rows, 2, figsize=(13, 4.2 * rows), squeeze=False, sharey=True)
+    for ax in axes.flat[len(runs):]:
+        ax.axis("off")
+    for ax, run in zip(axes.flat, runs):
         for k in range(5):
             hist = pd.read_csv(RUNS / run / f"fold{k}.csv")
             val = hist["val"] if "val" in hist else hist["val_l1"]  # runs before the metric choice logged L1
             line, = ax.plot(hist["epoch"], val, label=f"fold {k} validation")
             ax.plot(hist["epoch"], hist["train_loss"], ls=":", color=line.get_color())
-        ax.set_title(f"{run}: training loss (dotted) and inner-validation error")
+        ax.set_title(run, fontsize=10)
         ax.set_xlabel("epoch")
         ax.set_ylabel("error (u*)")
         ax.legend(fontsize=8)
+    fig.suptitle("Training loss (dotted) and inner-validation error (solid) per fold")
     fig.tight_layout()
     fig.savefig(FIG / "learning_curves.png", dpi=130)
     plt.close(fig)
@@ -134,11 +156,13 @@ def plot_per_case_vs_s07(per_case: pd.DataFrame, run: str) -> None:
     for ax, subset in zip(axes, ("idealized", "realistic")):
         sub = unet[unet["subset"] == subset]
         better = (sub["r2"] > s07.reindex(sub.index)).mean()
+        outside = int(((sub["r2"] < -1) | (s07.reindex(sub.index) < -1)).sum())
         ax.scatter(s07.reindex(sub.index), sub["r2"], s=10, alpha=0.6, color="#4c72b0")
         ax.plot([-1, 1], [-1, 1], color="0.4", lw=1)
         ax.set_xlim(-1, 1)
         ax.set_ylim(-1, 1)
-        ax.set_title(f"{subset}: U-Net better in {better:.0%} of {len(sub)} cases")
+        ax.set_title(f"{subset}: U-Net better in {better:.0%} of {len(sub)} cases"
+                     + (f"\n({outside} below -1, not shown)" if outside else ""), fontsize=10)
         ax.set_xlabel("S07 pixel GBM, per-case R²")
     axes[0].set_ylabel(f"{run}, per-case R²")
     fig.tight_layout()
@@ -170,9 +194,10 @@ def bootstrap_vs_s07(per_case: pd.DataFrame, run: str, n_boot: int = 2000) -> pd
     for subset in SUBSETS:
         sub = both if subset == "all" else both[both["subset"] == subset]
         groups = sub["split_group"].unique()
+        rows_of = {g: np.flatnonzero(sub["split_group"].to_numpy() == g) for g in groups}
         stats = {name: [] for name in ("pooled_r2", "median_case_r2", "mean_mae")}
         for _ in range(n_boot):
-            pick = pd.concat([sub[sub["split_group"] == g] for g in rng.choice(groups, len(groups))])
+            pick = sub.iloc[np.concatenate([rows_of[g] for g in rng.choice(groups, len(groups))])]
             for name, value in _differences(pick, run).items():
                 stats[name].append(value)
         point = _differences(sub, run)
@@ -211,26 +236,54 @@ def _folds_better(sub: pd.DataFrame, run: str, name: str) -> int:
     return better
 
 
+def fold0_versions(per_case: pd.DataFrame, grouped: list[str], dev: pd.DataFrame) -> pd.DataFrame:
+    """Fold 0's scored cases: what the fixes (first recipe against fixed defaults) and the tuning each added."""
+    extra = [run for run in FOLD0_ONLY if (RUNS / run / "fold0.json").exists() and (PREDS / run).is_dir()]
+    scored = pd.concat([per_case[per_case["run"].isin([*extra, *grouped, "s07_pixel_gbm"])],
+                        *(score_run(run, dev) for run in extra)], ignore_index=True)
+    scored = scored[scored["case"].isin(dev.index[dev["fold"] == 0])]
+    rows = []
+    for run in [*extra, *grouped, "s07_pixel_gbm"]:
+        sub = scored[scored["run"] == run]
+        record = RUNS / run / "fold0.json"
+        info = json.loads(record.read_text()) if record.exists() else {}
+        rows.append({"run": run, "n_cases": len(sub), "pooled_r2": pooled_r2(sub), "median_case_r2": sub["r2"].median(),
+                     "median_case_r2_idealized": sub.loc[sub["subset"] == "idealized", "r2"].median(),
+                     "median_case_r2_realistic": sub.loc[sub["subset"] == "realistic", "r2"].median(),
+                     "mean_mae": sub["mae"].mean(),
+                     # the inner-validation RMSE the run selected on; the first recipe selected on L1 instead
+                     "inner_val_rmse": info["best_val"] if info.get("val_metric") == "rmse" else np.nan})
+    return pd.DataFrame(rows)
+
+
 def main() -> None:
     FIG.mkdir(parents=True, exist_ok=True)
     runs = finished_runs()
     if not runs:
         raise SystemExit("no finished S11 run yet")
-    shared = {run: check_run(run) for run in runs}
+    split = {run: run_split(run) for run in runs} | {run: "grouped" for run in BASELINES}
+    grouped = [run for run in runs if split[run] == "grouped"]
+    if not grouped:
+        raise SystemExit("no finished grouped S11 run yet")
+    shared = {run: check_run(run) | {"split": split[run]} for run in runs}
     (OUT / "run_settings.json").write_text(json.dumps(shared, indent=2, default=str) + "\n")
-    dev = dev_cases()
-    per_case = pd.concat([score_run(run, dev) for run in [*runs, *BASELINES]], ignore_index=True)
+    folds = {name: fold_table(name) for name in set(split.values())}
+    per_case = pd.concat([score_run(run, folds[split[run]]).assign(split=split[run]) for run in [*runs, *BASELINES]],
+                         ignore_index=True)
     per_case.drop(columns=["sum_t", "sum_t2", "sse"]).to_csv(OUT / "per_case_metrics.csv", index=False,
                                                               float_format="%.5g")
     summary = summarise(per_case)
     summary.to_csv(OUT / "summary.csv", index=False, float_format="%.4f")
     print(summary.to_string(index=False))
-    paired = pd.concat([bootstrap_vs_s07(per_case, run) for run in runs], ignore_index=True)
+    versions = fold0_versions(per_case, grouped, folds["grouped"])
+    versions.to_csv(OUT / "fold0_versions.csv", index=False, float_format="%.4f")
+    print(versions.to_string(index=False))
+    paired = pd.concat([bootstrap_vs_s07(per_case, run) for run in grouped], ignore_index=True)
     paired.to_csv(OUT / "vs_s07.csv", index=False, float_format="%.4f")
     print(paired.to_string(index=False))
     plot_learning_curves(runs)
-    plot_error_maps(runs[0])
-    plot_per_case_vs_s07(per_case, runs[0])
+    plot_error_maps(grouped[0])
+    plot_per_case_vs_s07(per_case, grouped[0])
 
 
 if __name__ == "__main__":
