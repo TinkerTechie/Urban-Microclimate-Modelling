@@ -5,10 +5,10 @@ Trains a convolutional network that predicts the pedestrian-level wind speed U/u
 | | |
 | --- | --- |
 | Inputs | the S10 cache (`data/processed/dl/`), `data/splits.json` |
-| Outputs | `results/preds/<exp_id>/<case>.npz` and `results/checkpoints/<exp_id>/` (not tracked); `outputs/runs/<exp_id>/fold<k>.json` and `.csv`; `outputs/optuna/` (the tuning study); `outputs/summary.csv`, `outputs/vs_s07.csv`, figures |
+| Outputs | `results/preds/<exp_id>/<case>.npz` and `results/checkpoints/<exp_id>/` (not tracked); `outputs/runs/<exp_id>/fold<k>.json` and `.csv`; `outputs/optuna/` (the tuning study); `outputs/summary.csv`, `outputs/vs_s07.csv`, `outputs/fold0_versions.csv`, figures; `S11a_unet_baseline.ipynb` |
 | Code | `src/urbanwind/dl/nets.py`, `losses.py`, `train.py`, `datasets.py`; `configs/`, `overfit_check.py`, `tune_optuna.py`, `s11_results.py`, `kaggle_runner.py`; tests in `src/urbanwind/dl/tests/` |
 
-Status: the code is complete and tested, and the settings are tuned (see Tuning below). The final results (three seeds, five folds, and the random-split comparison) follow in a second pull request that closes #35. The fold-0 result below is preliminary.
+Status: complete. The code is tested, the settings are tuned (see Tuning below), and the results cover three seeds over all five grouped folds, plus a random-split comparison.
 
 ## Network
 
@@ -47,26 +47,53 @@ New architectures register themselves with `@register("name")` and are built wit
 | A perfect 1 m prediction on the 194 cases stored at 0.5 m | copied to sub-cells: median per-case R² 0.987 (worst 0.846), MAE 0.052 u*; bilinear: 0.992 (worst 0.890), MAE 0.030 u*, better in 193 of 194 cases. Bilinear is kept; the rest is the cost of the 1 m grid. |
 | Speed per training epoch of the default network | about 95 s on an Apple M3 Pro GPU, about 52 s on a Kaggle T4 |
 
-## Preliminary result: fold 0, one seed, before the final recipe
+## Results
 
-The first version of the recipe trained on fold 0. That version had unbalanced inner validation, selection on L1, no EMA, and copied 0.5 m predictions. It was then scored on fold 0's 97 held-out cases, the same cases as S07:
+`configs/unet_tuned.yaml`, three training seeds, each over all five grouped folds. Every one of the 482 development cases is scored once per seed, out of fold, by the Phase 1 evaluator. The numbers below are in `outputs/summary.csv`, `outputs/vs_s07.csv` and `outputs/fold0_versions.csv`; `S11a_unet_baseline.ipynb` presents them.
 
-| Fold 0, 97 cases | U-Net | S07 pixel model |
-| --- | --- | --- |
-| Pooled R² | 0.777 | 0.658 |
-| Median per-case R², idealized | 0.467 | 0.303 |
-| Median per-case R², realistic | 0.560 | 0.259 |
-| Mean absolute error | 0.478 u* (0.099 m/s) | 0.605 u* (0.125 m/s) |
-| Cases where the U-Net has the higher per-case R² | 34 of 38 idealized, 59 of 59 realistic | |
+| All 482 cases | Seed 0 | Seed 1 | Seed 2 | S07 pixel model |
+| --- | --- | --- | --- | --- |
+| Pooled R² | 0.709 | 0.712 | 0.711 | 0.591 |
+| Pooled R², idealized (190) | 0.935 | 0.937 | 0.944 | 0.876 |
+| Pooled R², realistic (292) | 0.677 | 0.680 | 0.678 | 0.550 |
+| Median per-case R² | 0.566 | 0.560 | 0.595 | 0.304 |
+| Median per-case R², idealized | 0.667 | 0.621 | 0.683 | 0.418 |
+| Median per-case R², realistic | 0.523 | 0.523 | 0.544 | 0.247 |
+| Mean absolute error | 0.486 u* (0.100 m/s) | 0.484 u* (0.100 m/s) | 0.472 u* (0.098 m/s) | 0.611 u* (0.126 m/s) |
 
-This is one fold and one seed, and S07 scores above its own average on this fold (0.658 against 0.591 pooled over all folds). The claim against S07 rests on the five-fold, three-seed results with group-bootstrap intervals in `outputs/vs_s07.csv`.
+**Against S07, with uncertainty** (`outputs/vs_s07.csv`, 95% intervals from resampling whole cities and layout families 2,000 times):
+- **Pooled R²:** higher by 0.118 to 0.122 across the seeds. The lowest interval bound is +0.068.
+- **Median per-case R²:** higher by 0.255 to 0.291. The lowest bound is +0.220.
+- **Mean absolute error:** lower by 0.125 to 0.139 u*. The bound closest to zero is −0.104.
+- **Consistency:** every interval excludes zero, for all cases and for each subset alone. The U-Net has the higher per-case R² in 96.5% to 96.9% of the cases and wins all five folds on every measure.
+
+**What the fixes and the tuning added**, on fold 0's 97 scored cases (`outputs/fold0_versions.csv`):
+
+| Fold 0, 97 cases | Pooled R² | Median per-case R² | Mean absolute error (u*) |
+| --- | --- | --- | --- |
+| First version of the recipe, before the audit fixes | 0.777 | 0.552 | 0.478 |
+| Final code, default settings | 0.787 | 0.572 | 0.466 |
+| Final code, tuned settings, seeds 0 / 1 / 2 | 0.791 / 0.789 / 0.802 | 0.590 / 0.567 / 0.633 | 0.457 / 0.465 / 0.442 |
+| S07 pixel model | 0.658 | 0.280 | 0.605 |
+
+- **The fixes helped most on the idealized layouts.** Their median per-case R² rose from 0.467 to 0.545.
+- **The tuning added a little more, with a network about half the size.** On the shared inner-validation groups it scored 0.578 to 0.608 RMSE, against 0.608 for the defaults.
+- **Fold 0 is an easier fold than average.** S07 scores 0.658 pooled here against 0.591 over all folds.
+
+**Leakage: a random split of the same cases** (`configs/unet_tuned_random.yaml`, one seed):
+- **Most cases do better.** The random split, which lets a test case's city or layout family into training, beats the mean of the grouped seeds in 312 of 482 cases. Its median per-case R² is 0.593, against 0.560 to 0.595.
+- **The pooled R² is lower (0.683), because of one case: AU-Preston.** It is the largest Melbourne case (750,911 open cells), and its mean speed is 5.49 u*, twice that of any other Melbourne case.
+  - The grouped models, which never see Melbourne when they predict it, get its mean within 0.06 to 0.25 u*.
+  - The random-split model, trained on most of the other, much slower Melbourne cases, is 3.4 u* too low.
+- **Without AU-Preston,** the random split scores 0.723 pooled, against 0.692 to 0.695 for the grouped seeds.
+- **So leakage flatters this model by about 0.03 pooled R²,** and on one case it shows the opposite risk: a model that has seen a city expects the next case from it to look like the rest.
 
 ## Running it
 
 ```bash
 uv run python pipeline/S11_unet_baseline/overfit_check.py
-uv run python -m urbanwind.dl.train --config pipeline/S11_unet_baseline/configs/unet.yaml --seed 0            # all five folds
-uv run python -m urbanwind.dl.train --config pipeline/S11_unet_baseline/configs/unet.yaml --seed 0 --repredict  # new predictions from saved weights
+uv run python -m urbanwind.dl.train --config pipeline/S11_unet_baseline/configs/unet_tuned.yaml --seed 0            # all five folds
+uv run python -m urbanwind.dl.train --config pipeline/S11_unet_baseline/configs/unet_tuned.yaml --seed 0 --repredict  # new predictions from saved weights
 uv run python pipeline/S11_unet_baseline/s11_results.py
 ```
 
@@ -127,3 +154,6 @@ Tests that import PyTorch go in `src/urbanwind/dl/tests/` (on macOS they run in 
 - The network sees the building map and the wind angle only. Anything about a case that the raster does not show, such as the height of the simulated domain, is out of its reach, and it has no case-level descriptors. S13 adds a case-level model.
 - Predictions are made on the 1 m grid; the cost on the 0.5 m cases is the ceiling in the table above.
 - The validation cases of each fold are not used for training, unless the run sets `inner_val_fraction: 0`.
+- **The schedule length was not varied.** Every fold ran the full 100 epochs, and 17 of the 20 final trainings kept their last epoch. The error flattens as the learning rate decays to its floor, but a longer schedule was not tried.
+- **The random split was trained with one seed only.** Its gap to the grouped seeds rests on that one run.
+- **The trained weights are not in the repository.** The 20 final trainings ran on Kaggle (two T4 GPUs per session, about 65 to 72 minutes per fold). Their predictions were rebuilt locally with `--repredict` and reproduce the scores computed on Kaggle exactly; ask for access to the weights.
