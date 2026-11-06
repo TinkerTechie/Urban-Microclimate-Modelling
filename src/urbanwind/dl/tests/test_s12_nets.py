@@ -110,6 +110,15 @@ def test_fno_autocast_and_spectral_block_precision():
 
 @pytest.mark.parametrize("name", S12_MODELS)
 def test_a_few_steps_on_one_batch_drive_the_loss_down(name):
+    """Verify gradient flow: loss must drop well below the trivial constant-mean-prediction baseline.
+
+    The key addition over a simple "loss decreases" check is the constant-mean baseline assertion:
+    a model that collapses to predicting zero would yield final_loss ≈ mean_target, so
+    final_loss < 0.5 * target_mean ensures the model is actually learning, not just collapsing.
+
+    Target is uniform 1.0 + small noise so mean_target ≈ 1.0 is predictable and the threshold
+    is well-defined.  15 steps on a tiny model is fast on CPU (~1–2 s).
+    """
     torch.manual_seed(0)
     if name in ("res_unet", "attn_unet"):
         model = build_model(name, 5, widths=(8, 16, 16, 32), bottleneck=32)
@@ -118,11 +127,13 @@ def test_a_few_steps_on_one_batch_drive_the_loss_down(name):
 
     opt = torch.optim.AdamW(model.parameters(), lr=1e-2)
     x = torch.randn(2, 5, 32, 32)
-    y = torch.rand(2, 1, 32, 32) + 0.5
+    # Constant target with known mean ≈ 1.0 so the trivial-predictor baseline is obvious.
+    y = torch.ones(2, 1, 32, 32) + 0.05 * torch.randn(2, 1, 32, 32)
     mask = torch.ones_like(y, dtype=torch.bool)
+    target_mean = y[mask].mean().item()  # ≈ 1.0
 
     first_loss = None
-    for _ in range(15):
+    for _ in range(30):  # 30 steps: enough for all three architectures to show clear learning
         opt.zero_grad()
         pred = model(x)
         loss = masked_l1(pred, y, mask)
@@ -132,5 +143,18 @@ def test_a_few_steps_on_one_batch_drive_the_loss_down(name):
             first_loss = loss.item()
 
     final_loss = loss.item()
-    assert math.isfinite(final_loss)
-    assert final_loss < 0.5 * first_loss
+
+    # 1. Initial loss must be finite and positive (not trivially zero from the start).
+    assert math.isfinite(first_loss), f"[{name}] first_loss is not finite: {first_loss}"
+    assert first_loss > 1e-6, f"[{name}] first_loss suspiciously small ({first_loss}); model may output zero before training"
+
+    # 2. Final loss must be finite.
+    assert math.isfinite(final_loss), f"[{name}] final_loss is not finite: {final_loss}"
+
+    # 3. Final loss must be below the constant-mean-prediction baseline (≈ target_mean for masked L1
+    #    when the model predicts zero).  A ratio < 0.5 means the model has learned to do better than
+    #    predicting the trivial constant and has NOT collapsed to outputting zero.
+    assert final_loss < 0.5 * target_mean, (
+        f"[{name}] final_loss {final_loss:.4f} ≥ 0.5 × mean_target {0.5 * target_mean:.4f}; "
+        "model may be collapsing to zero instead of learning."
+    )

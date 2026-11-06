@@ -21,6 +21,7 @@ import pathlib
 import time
 
 import torch
+import yaml
 
 from urbanwind.dl.cache import CACHE_DIR, CHANNELS, dev_cases
 from urbanwind.dl.datasets import PatchDataset
@@ -28,7 +29,9 @@ from urbanwind.dl.losses import masked_l1
 from urbanwind.dl.nets import build_model
 from urbanwind.dl.train import pick_device
 
-OUT = pathlib.Path(__file__).resolve().parent / "outputs"
+STAGE_DIR = pathlib.Path(__file__).resolve().parent
+CONFIGS_DIR = STAGE_DIR / "configs"
+OUT = STAGE_DIR / "outputs"
 STEPS = 2000
 N_PATCHES = 4
 MODELS = ("res_unet", "attn_unet", "fno")
@@ -54,7 +57,16 @@ def run_overfit_check(model_name: str, steps: int = STEPS, device: torch.device 
     if device is None:
         device = pick_device()
     x, y, mask = get_patches(device)
-    model = build_model(model_name, len(CHANNELS), dropout=0.0).to(device)
+
+    cfg_file = CONFIGS_DIR / f"{model_name}.yaml"
+    model_kwargs = {}
+    if cfg_file.exists():
+        with open(cfg_file) as f:
+            raw_cfg = yaml.safe_load(f) or {}
+            model_kwargs = dict(raw_cfg.get("model", {}).get("kwargs", {}))
+    # Dropout is set to 0.0 for the overfit memorisation check (matching S11)
+    model_kwargs["dropout"] = 0.0
+    model = build_model(model_name, len(CHANNELS), **model_kwargs).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.0)
 
     use_amp = (device.type != "cpu")
@@ -89,6 +101,8 @@ def run_overfit_check(model_name: str, steps: int = STEPS, device: torch.device 
     target_mean = float((y * mask).sum() / mask.sum())
     result = {
         "model": model_name,
+        "config_file": str(cfg_file.relative_to(STAGE_DIR)) if cfg_file.exists() else None,
+        "config": model_kwargs,
         "device": device.type,
         "patches": N_PATCHES,
         "steps": steps,

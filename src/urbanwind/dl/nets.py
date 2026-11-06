@@ -103,7 +103,14 @@ class UNet(nn.Module):
 
 
 class ResBlock(nn.Module):
-    """Residual block: two circular 3x3 convolutions with GroupNorm and ReLU, plus 1x1 projection."""
+    """Residual block: two circular 3x3 convolutions with GroupNorm and ReLU, plus 1x1 projection.
+
+    The scale (gamma) of the final GroupNorm (gn2) is zero-initialised so that at the start of
+    training the residual branch contributes nothing and each block behaves like an identity mapping.
+    This is a standard technique (ReZero / FixUp family) that dramatically improves early gradient
+    flow in deep residual networks and prevents the collapse-to-zero pathology observed without it.
+    The He-init loop in ResUNet.__init__ only touches nn.Conv2d, so it does not overwrite this.
+    """
 
     def __init__(self, cin: int, cout: int, groups: int = 8):
         super().__init__()
@@ -112,6 +119,10 @@ class ResBlock(nn.Module):
         self.conv2 = nn.Conv2d(cout, cout, 3, padding=1, padding_mode="circular")
         self.gn2 = nn.GroupNorm(groups, cout)
         self.proj = nn.Conv2d(cin, cout, 1) if cin != cout else None
+        # Zero-initialise the scale of the last normalisation in the residual branch so the block
+        # starts as a near-identity mapping.  This is applied here (not in ResUNet.__init__) so that
+        # the invariant holds regardless of where ResBlock is used.
+        nn.init.zeros_(self.gn2.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         res = self.proj(x) if self.proj is not None else x
@@ -122,7 +133,20 @@ class ResBlock(nn.Module):
 
 @register("res_unet")
 class ResUNet(nn.Module):
-    """Periodic Res-U-Net: S11 layout with residual blocks and softplus output."""
+    """Periodic Res-U-Net: S11 layout with residual blocks and softplus output.
+
+    Two-part initialisation strategy for stable early training:
+    1. Each ResBlock zero-initialises its final GroupNorm scale (gn2.weight), so the residual
+       branch contributes nothing at step 0 and each block starts as a near-identity mapping.
+    2. The head (1x1 output conv) weight is scaled to 0.01× He-init. Without this, the stacked
+       projection shortcuts (which change channel count and cannot be identity) produce initial
+       outputs in the range [26, 57] on typical inputs, far above the target speed range (≈1 m/s).
+       Two gradient steps from such a large initial loss drive the head weight strongly negative and
+       the model collapses to predicting ≈0 (confirmed by the 30-step CPU overfit check). Scaling
+       the head to 0.01 brings the initial output to the correct order of magnitude (≈0.5–1 m/s)
+       and prevents this collapse. This is standard practice (BigGAN, FixUp) and does not conflict
+       with the He-init loop because the loop runs first and the scaling is applied after.
+    """
 
     def __init__(self, in_ch: int = 5, widths: tuple[int, ...] = (24, 48, 96, 192), bottleneck: int = 384,
                  dropout: float = 0.08):
@@ -146,6 +170,9 @@ class ResUNet(nn.Module):
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 nn.init.zeros_(m.bias)
+        # Scale head weight to 0.01× so initial predictions are O(1) not O(50).
+        # Applied AFTER the He-init loop so it is not overwritten.
+        self.head.weight.data.mul_(0.01)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[-2] % self.multiple or x.shape[-1] % self.multiple:

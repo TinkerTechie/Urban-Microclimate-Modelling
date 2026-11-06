@@ -64,7 +64,7 @@ To isolate the impact of architecture design from hyperparameter advantages:
 | **Parameter Budget** | `param_counts.py` | All candidates within 4.1% of baseline (4.73M to 5.06M). |
 | **Periodicity & Shift Equivariance** | `test_s12_nets.py` | Machine-precision shift equivariance ($< 10^{-10}$ in float64) under periodic roll for all candidates (including non-multiple shifts of 7 and 13 cells for FNO). |
 | **Autocast & Precision** | `test_s12_nets.py` | FNO executes seamlessly under `torch.autocast` on CPU/bfloat16 and CUDA/fp16 with internal float32 spectral block. |
-| **Overfit 4 patches (sanity check)** | `overfit_check.py` | 30 steps on CPU: loss drops rapidly for all models (`res_unet` $101.4 \to 1.00$, `attn_unet` $1.53 \to 0.25$, `fno` $0.57 \to 0.24$). Full 2,000 steps runs on GPU. |
+| **Overfit 4 patches (sanity check)** | `overfit_check.py` | 30-step CPU smoke check confirms rapid loss decrease without collapse (`res_unet` $0.44 \to 0.25$, `attn_unet` $1.53 \to 0.25$, `fno` $0.57 \to 0.24$). Full 2,000-step overfit validation runs on Kaggle GPU. |
 
 ---
 
