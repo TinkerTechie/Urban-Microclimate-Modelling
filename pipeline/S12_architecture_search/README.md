@@ -54,6 +54,8 @@ To isolate the impact of architecture design from hyperparameter advantages:
   To guarantee that frequency modes correspond to the exact same physical spatial wavelengths during inference as during training, the FNO config enforces `infer_window: 256` and `infer_border: 16`. Full domains are inferred via overlapping 256×256 wrap-around tiles matching the training distribution.
 - **Float32 Spectral Execution under Mixed Precision:**
   PyTorch AMP autocast is explicitly disabled inside `SpectralBlock`. FFT and complex multiplication run in `float32` because half-precision (fp16) cuFFT restricts sizes to powers of two and risks precision loss, whereas float32 FFT supports arbitrary non-power-of-two domain sizes.
+- **AMP Disabled for FNO (`amp: false`):**
+  FNO uses AMP disabled because its complex-valued spectral gradients are incompatible with the current PyTorch GradScaler unscale operation. Res-U-Net and Attention U-Net retain AMP enabled. This is an implementation compatibility adjustment, not an architectural change.
 
 ---
 
