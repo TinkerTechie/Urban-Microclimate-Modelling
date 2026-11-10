@@ -36,6 +36,7 @@ OUT = STAGE / "outputs"
 FIG = STAGE / "outputs" / "figures"
 RUNS = STAGE / "outputs" / "runs"
 S11_RUNS = REPO / "pipeline" / "S11_unet_baseline" / "outputs" / "runs"
+S11_METRICS_CSV = REPO / "pipeline" / "S11_unet_baseline" / "outputs" / "per_case_metrics.csv"
 PREDS = REPO / "results" / "preds"
 
 SUBSETS = ("all", "idealized", "realistic")
@@ -237,18 +238,63 @@ def plot_learning_curves_if_available(runs: list[str]) -> None:
     plt.close(fig)
 
 
+def load_s11_baseline_per_case(ref_run: str = S11_BASELINE_RUN) -> pd.DataFrame:
+    """Load S11 baseline metrics, falling back to S11 per_case_metrics.csv if preds are missing.
+
+    When raw prediction files are unavailable, reconstructs the necessary bootstrap columns:
+        sum_t  = n * mean_true
+        sum_t2 = n * (var_true + mean_true**2)
+        sse    = n * rmse**2
+    """
+    dev = fold_table("grouped")
+    if (PREDS / ref_run).is_dir() and len(list((PREDS / ref_run).glob("*.npz"))) == len(dev):
+        return score_run(ref_run, dev, PREDS)
+
+    if S11_METRICS_CSV.exists():
+        df = pd.read_csv(S11_METRICS_CSV)
+        sub = df[df["run"] == ref_run].copy()
+        if not sub.empty:
+            sub["sum_t"] = sub["n"] * sub["mean_true"]
+            sub["sum_t2"] = sub["n"] * (sub["var_true"] + sub["mean_true"] ** 2)
+            sub["sse"] = sub["n"] * (sub["rmse"] ** 2)
+            keep_cols = [
+                "case",
+                "r2",
+                "delta_p95",
+                "mae",
+                "subset",
+                "split_group",
+                "outer_fold",
+                "flagged",
+                "n",
+                "run",
+                "sum_t",
+                "sum_t2",
+                "sse",
+            ]
+            sub["outer_fold"] = sub["outer_fold"].astype(int)
+            sub["flagged"] = sub["flagged"].astype(bool)
+            return sub[[c for c in keep_cols if c in sub.columns]]
+
+    raise FileNotFoundError(
+        f"Could not load S11 baseline: neither {PREDS / ref_run} nor {S11_METRICS_CSV} was found."
+    )
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     runs = finished_runs()
 
     if not runs:
         print("No completed S12 runs found in pipeline/S12_architecture_search/outputs/runs/.")
-        print("Full training runs will be executed on GPU (e.g. on Kaggle).")
-        print("Writing empty template summary and comparison files without fabricated numbers.")
-        empty_summary = pd.DataFrame(columns=SUMMARY_COLUMNS)
-        empty_summary.to_csv(OUT / "summary.csv", index=False)
-        empty_vs = pd.DataFrame(columns=VS_S11_COLUMNS)
-        empty_vs.to_csv(OUT / "vs_s11.csv", index=False)
+        print("S12 evaluation arrays are not present in this local environment.")
+        if (OUT / "summary.csv").exists() and (OUT / "summary.csv").stat().st_size > 0:
+            print(f"Preserving existing populated {OUT / 'summary.csv'} (do not overwrite with empty template).")
+        else:
+            print("Writing empty template summary.csv.")
+            empty_summary = pd.DataFrame(columns=SUMMARY_COLUMNS)
+            empty_summary.to_csv(OUT / "summary.csv", index=False)
+        print("Skipping vs_s11.csv: S12 prediction files (.npz) are required for paired bootstrap comparison and are not present.")
         return
 
     # When completed runs exist:
@@ -259,11 +305,14 @@ def main() -> None:
     # Score S12 runs
     per_case_list = [score_run(r, dev, PREDS) for r in runs]
 
-    # Check if S11 baseline predictions exist for paired comparison
-    s11_available = (PREDS / S11_BASELINE_RUN).is_dir()
-    if s11_available:
-        s11_per_case = score_run(S11_BASELINE_RUN, dev, PREDS)
+    # Check if S11 baseline predictions exist for paired comparison, or fall back to per_case_metrics.csv
+    try:
+        s11_per_case = load_s11_baseline_per_case(S11_BASELINE_RUN)
         per_case_list.append(s11_per_case)
+        s11_available = True
+    except FileNotFoundError as e:
+        print(f"Warning: {e}")
+        s11_available = False
 
     per_case = pd.concat(per_case_list, ignore_index=True)
 
@@ -326,8 +375,7 @@ def main() -> None:
         print("=" * 80)
         print(all_vs.to_string(index=False))
     else:
-        empty_vs = pd.DataFrame(columns=VS_S11_COLUMNS)
-        empty_vs.to_csv(OUT / "vs_s11.csv", index=False)
+        print("Skipping vs_s11.csv: S11 baseline reference metrics could not be loaded.")
 
     plot_learning_curves_if_available(runs)
 

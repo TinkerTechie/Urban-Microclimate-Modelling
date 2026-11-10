@@ -65,7 +65,7 @@ To isolate the impact of architecture design from hyperparameter advantages:
 | --- | --- | --- |
 | **Parameter Budget** | `param_counts.py` | All candidates within 4.1% of baseline (4.73M to 5.06M). |
 | **Periodicity & Shift Equivariance** | `test_s12_nets.py` | Machine-precision shift equivariance ($< 10^{-10}$ in float64) under periodic roll for all candidates (including non-multiple shifts of 7 and 13 cells for FNO). |
-| **Autocast & Precision** | `test_s12_nets.py` | FNO executes seamlessly under `torch.autocast` on CPU/bfloat16 and CUDA/fp16 with internal float32 spectral block. |
+| **Autocast & Precision** | `test_s12_nets.py` | FNO executes under `torch.autocast` on CPU/bfloat16 with an internal float32 spectral block. Under CUDA fp16 the GradScaler cannot unscale complex gradients, so the FNO is trained with `amp: false` (section 3). |
 | **Overfit 4 patches (sanity check)** | `overfit_check.py` | 30-step CPU smoke check confirms rapid loss decrease without collapse (`res_unet` $0.44 \to 0.25$, `attn_unet` $1.53 \to 0.25$, `fno` $0.57 \to 0.24$). Full 2,000-step overfit validation runs on Kaggle GPU. |
 
 ---
@@ -100,26 +100,37 @@ Once training completes:
 ```bash
 # Score finished runs and generate outputs/summary.csv and outputs/vs_s11.csv
 uv run python pipeline/S12_architecture_search/s12_results.py
+
+# Plot visual comparison between S12 candidates and S11 baseline range
+uv run python pipeline/S12_architecture_search/plot_comparison.py
 ```
 
 ---
 
 ## 6. Experimental Results
 
-*(To be filled after the Kaggle GPU runs — no numbers fabricated)*
+All three architectures were trained under the equal-budget protocol (section 2): 5 outer folds, seed 0, then scored on all 482 development cases through `urbanwind.evaluate`. Raw numbers: `outputs/summary.csv`.
+The S11 rows are copied from `pipeline/S11_unet_baseline/outputs/summary.csv` (grouped split) and the GPU minutes are the sums of the `minutes` field in its fold records.
 
-| Model | Seed | Parameters | GPU Minutes | Pooled $R^2$ | Median Per-Case $R^2$ (All) | Median Per-Case $R^2$ (Idealized) | Median Per-Case $R^2$ (Realistic) | Mean $\Delta P_{95}$ | Inference Time / Case (s) |
+| Model | Seed | Parameters | GPU minutes | Pooled $R^2$ | Median per-case $R^2$ (all) | Median per-case $R^2$ (idealized) | Median per-case $R^2$ (realistic) | Mean $\Delta P_{95}$ | Inference s / case |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **S11 Tuned U-Net (Ref)** | 0 | 4,860,313 | 45.2 | 0.7092 | 0.5662 | 0.6673 | 0.5234 | −0.4571 | *measured* |
-| **S11 Tuned U-Net (Ref)** | 1 | 4,860,313 | 44.8 | 0.7122 | 0.5597 | 0.6210 | 0.5227 | −0.4569 | *measured* |
-| **S11 Tuned U-Net (Ref)** | 2 | 4,860,313 | 45.0 | 0.7111 | 0.5953 | 0.6828 | 0.5437 | −0.4385 | *measured* |
-| **Res-U-Net** | 0 | 5,057,377 | — | — | — | — | — | — | — |
-| **Attention U-Net** | 0 | 5,009,717 | — | — | — | — | — | — | — |
-| **FNO** | 0 | 4,728,337 | — | — | — | — | — | — | — |
-| *Top Architecture 1* | 1 | — | — | — | — | — | — | — | — |
-| *Top Architecture 1* | 2 | — | — | — | — | — | — | — | — |
-| *Top Architecture 2* | 1 | — | — | — | — | — | — | — | — |
-| *Top Architecture 2* | 2 | — | — | — | — | — | — | — | — |
+| S11 tuned U-Net (ref) | 0 | 4,860,313 | 327.8 | 0.7092 | 0.5662 | 0.6673 | 0.5234 | −0.4571 | n/a |
+| S11 tuned U-Net (ref) | 1 | 4,860,313 | 329.9 | 0.7122 | 0.5597 | 0.6210 | 0.5227 | −0.4569 | n/a |
+| S11 tuned U-Net (ref) | 2 | 4,860,313 | 337.2 | 0.7111 | 0.5953 | 0.6828 | 0.5437 | −0.4385 | n/a |
+| Attention U-Net | 0 | 5,009,717 | 412.2 | 0.6937 | 0.5291 | 0.6287 | 0.4988 | −0.4813 | 0.0442 |
+| Res-U-Net | 0 | 5,057,377 | 359.5 | 0.6830 | 0.5288 | 0.6274 | 0.4998 | −0.6733 | 0.0382 |
+| FNO | 0 | 4,728,337 | 251.1 | 0.5578 | 0.3552 | 0.3808 | 0.3434 | −0.6099 | 0.0245 |
+
+Seeds 1 and 2 for the two best architectures were **not run** (see limitations). The S11 inference time was not measured with this harness, so no S11 value is given.
+
+### Reading the table
+
+- **No new architecture beats the S11 tuned U-Net.** The best candidate, the Attention U-Net, has pooled $R^2$ 0.694 against S11's 0.709–0.712 (S11 seed spread 0.003), median per-case $R^2$ 0.529 against 0.560–0.595, and mean $\Delta P_{95}$ −0.481 against −0.439 to −0.457. It is below S11 on all three headline metrics.
+- **Where the gap is.** On idealized cases the Attention U-Net's median per-case $R^2$ (0.629) lies inside the S11 seed range (0.621–0.683), so one seed cannot separate them. On realistic cases (0.499 against 0.523–0.544) and in $\Delta P_{95}$ it is below the whole S11 range.
+- **Attention U-Net and Res-U-Net are tied on per-case $R^2$** (0.5291 against 0.5288 overall; within 0.001 in each subset). Pooled $R^2$ differs by 0.011 and $\Delta P_{95}$ by 0.19, from one seed each, so no ranking between them is claimed.
+- **The FNO is clearly the weakest** (pooled $R^2$ 0.558, median per-case 0.355). It is the cheapest to train (251 GPU minutes) and run (0.0245 s/case).
+- **$\Delta P_{95}$ is negative for every model**, so all of them (including S11) under-predict the high-speed tail on average. The S12 models do so by more than S11.
+- **Hypothesis, not tested:** residual blocks and attention gates add capacity but no new inductive bias for the building-wake structure; the FNO's fixed low-frequency modes may be a poor match for sharp building edges.
 
 ---
 
@@ -127,10 +138,16 @@ uv run python pipeline/S12_architecture_search/s12_results.py
 
 At least three architectures compared under equal budgets. Either the winner beats the S11 tuned U-Net on median per-case $R^2$ or mean $\Delta P_{95}$ by more than the seed spread (S11 seeds 0–2: median per-case $R^2 \in [0.560, 0.595]$, mean absolute error $\in [0.472, 0.486]\ u^*$), or the negative result is documented honestly.
 
+**Outcome:** Negative result documented; S11 remains best.
+
 ---
 
 ## 8. Limitations
 
 1. **Equal-budget constraint:** Hyperparameters (learning rate $3.6 \times 10^{-4}$, weight decay $6.5 \times 10^{-5}$) were tuned specifically for the baseline U-Net in S11. FNO or ResNet architectures may prefer different learning rates or schedules; holding them constant is a deliberate protocol choice to ensure equal training budgets, but represents a known limitation for architectures with different optimization dynamics.
 2. **Wavelength tiling trade-off:** While 256×256 tiled inference preserves physical wavelength interpretation for FNO, it prevents the model from exploiting global cross-neighbourhood low-frequency modes across multi-kilometer domains in a single pass.
-
+3. **Single seed per architecture:** FNO, Res-U-Net, and Attention U-Net were evaluated on seed 0 only. S12 has no multi-seed spread estimate; S11's spread is taken from its three seeds.
+4. **FNO numeric precision (`amp: false`):** The FNO was trained with `amp: false`, because fp16 `GradScaler` cannot unscale complex gradients. The other two used AMP, so numeric precision is not identical.
+5. **Approximate GPU minutes and resumed fold 4:** GPU minutes are approximate: folds ran on Kaggle and Colab T4 GPUs, two jobs shared a node on Kaggle, and resumed folds count only the minutes of the final segment. Fold 4 was resumed from checkpoints created on a different machine (same code and configuration).
+6. **Inference time benchmarking:** Inference time was measured on a single GPU model in one session and is only comparable among the S12 rows.
+7. **Paired bootstrap comparison:** The group-bootstrap comparison against S11 (`outputs/vs_s11.csv`) was not produced.

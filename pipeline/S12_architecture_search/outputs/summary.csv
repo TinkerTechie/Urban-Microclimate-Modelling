@@ -1,1 +1,4 @@
 model,seed,parameters,gpu_minutes,pooled_r2,median_case_r2_all,median_case_r2_idealized,median_case_r2_realistic,mean_delta_p95,inference_sec_per_case
+attn_unet,0,5009717,412.2,0.6937,0.5291,0.6287,0.4988,-0.4813,0.0442
+fno,0,4728337,251.1,0.5578,0.3552,0.3808,0.3434,-0.6099,0.0245
+res_unet,0,5057377,359.5,0.683,0.5288,0.6274,0.4998,-0.6733,0.0382
