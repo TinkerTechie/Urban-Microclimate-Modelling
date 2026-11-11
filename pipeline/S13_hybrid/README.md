@@ -5,10 +5,10 @@ Asks where the S11 U-Net's remaining error lies, whether the Phase 1 tree models
 | | |
 | --- | --- |
 | Inputs | the S11 tuned predictions (`results/preds/s11_unet_tuned_seed{0,1,2}/`, not tracked), `pipeline/S11_unet_baseline/outputs/per_case_metrics.csv`, the S06c out-of-fold predictions, the S10 cache |
-| Outputs | `outputs/level_test.csv`, `outputs/error_anatomy.csv`, `outputs/fold0_screen.csv`, `outputs/convnext_diagnosis.csv`; `outputs/runs/<exp_id>/fold<k>.json` and `.csv` |
-| Code | `s13_level_pattern.py`, `s13_fold0.py`, `convnext_diagnosis.py`, `configs/`; `ConvNeXtUNet` in `src/urbanwind/dl/nets.py`; tests in `src/urbanwind/dl/tests/test_s13_*.py` |
+| Outputs | `outputs/level_test.csv`, `outputs/error_anatomy.csv`, `outputs/fold0_screen.csv`, `outputs/convnext_diagnosis.csv`, `outputs/s13_unet_tuned_e200_seed0_summary.csv` and `_vs_s11.csv`; `outputs/runs/<exp_id>/fold<k>.json` and `.csv` |
+| Code | `s13_level_pattern.py`, `s13_fold0.py`, `convnext_diagnosis.py`, `s13_vs_s11.py`, `configs/`; `ConvNeXtUNet` in `src/urbanwind/dl/nets.py`; tests in `src/urbanwind/dl/tests/test_s13_*.py` |
 
-Status: in progress. The level test, the error anatomy, the fold-0 screen and the ConvNeXt diagnosis are complete; the 200-epoch U-Net is training on the other four folds.
+Status: in progress. The level test, the error anatomy, the fold-0 screen, the ConvNeXt diagnosis and the five-fold run of the 200-epoch U-Net (seed 0) are complete.
 
 ## 1. Where the S11 error is (`s13_level_pattern.py`)
 
@@ -78,6 +78,28 @@ Its training loss is higher than the U-Net's at every epoch of the fold-0 run (0
 - Only dense 3×3 convolutions help: putting the U-Net's convolution block back where each skip is merged closes about half the gap, with 40% more parameters, and still trails the U-Net.
 - The depthwise convolution at the heart of the ConvNeXt block filters each channel on its own and mixes channels only within a cell. For rebuilding sharp flow patterns at building edges, the dense 3×3 convolutions of the U-Net, which mix all channels across neighbouring cells, fit better at an equal budget.
 
+## 3. The 200-epoch U-Net on all five folds (`s13_vs_s11.py`)
+
+Seed 0 of `unet_tuned_e200` on the 482 development cases (`outputs/s13_unet_tuned_e200_seed0_summary.csv`), next to the three S11 tuned seeds:
+
+| Run | Pooled R² | Median per-case R² | Mean MAE (u*) | Mean ΔP95 (u*) | Realistic pooled R² |
+| --- | --- | --- | --- | --- | --- |
+| S11 tuned U-Net, seeds 0, 1, 2 | 0.7092, 0.7122, 0.7111 | 0.5662, 0.5597, 0.5953 | 0.4856, 0.4840, 0.4720 | -0.4571, -0.4569, -0.4385 | 0.6768, 0.6799, 0.6776 |
+| `unet_tuned_e200`, seed 0 | 0.7193 | 0.6016 | 0.4641 | -0.4127 | 0.6863 |
+
+Against S11 seed 0, which differs only in the schedule length, case by case with 95% intervals from 2,000 resamples of whole cities and layout families (`outputs/s13_unet_tuned_e200_seed0_vs_s11.csv`):
+
+| Subset | Pooled R² | Median per-case R² | Mean MAE (u*) | Cases with higher R² | Folds better (pooled R²) |
+| --- | --- | --- | --- | --- | --- |
+| All | +0.0101 [0.0024, 0.0177] | +0.0355 [0.0268, 0.0629] | -0.0216 [-0.0298, -0.0148] | 81% | 3 of 5 |
+| Idealized | +0.0140 [0.0110, 0.0203] | +0.0613 [0.0355, 0.1063] | -0.0382 [-0.0494, -0.0304] | 96% | 5 of 5 |
+| Realistic | +0.0096 [0.0002, 0.0183] | +0.0222 [0.0064, 0.0416] | -0.0108 [-0.0180, -0.0039] | 71% | 3 of 5 |
+
+- The longer schedule beats every S11 seed on pooled R², median per-case R², mean MAE and mean ΔP95. On its own it matches the pooled R² of the three S11 seeds averaged (0.7194, `outputs/level_test.csv`).
+- The gain is largest on the idealized layouts. On the realistic cities it is smaller, and its pooled-R² interval only just excludes zero.
+- Every interval comes from one training seed on each side, so it does not include the spread between seeds.
+- Fold 3 stopped early, at epoch 176, after 30 epochs without improvement; the others ran all 200 epochs, with their best epochs at 169 to 199.
+
 ## Running it
 
 ```bash
@@ -85,6 +107,7 @@ uv run python pipeline/S13_hybrid/s13_level_pattern.py      # needs the S11 tune
 uv run python -m urbanwind.dl.train --config pipeline/S13_hybrid/configs/convnext_unet.yaml --seed 0 --folds 0
 uv run python -m pipeline.S13_hybrid.s13_fold0               # scores every finished candidate on fold 0
 uv run python -m pipeline.S13_hybrid.convnext_diagnosis      # about 30 minutes on an Apple M-series GPU
+uv run python -m pipeline.S13_hybrid.s13_vs_s11              # needs all five folds of the candidate's predictions
 ```
 
 The candidates were trained on Kaggle T4 GPUs with `pipeline/S11_unet_baseline/kaggle_runner.py`, and their fold-0 predictions rebuilt locally with `--repredict`.
