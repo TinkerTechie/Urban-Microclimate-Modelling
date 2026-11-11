@@ -184,9 +184,9 @@ def check_run(run: str) -> dict:
     return shared
 
 
-def bootstrap_vs_s07(per_case: pd.DataFrame, run: str, n_boot: int = 2000) -> pd.DataFrame:
-    """The run against S07 case by case, with 95% intervals from resampling whole split groups."""
-    both = per_case[per_case["run"].isin([run, "s07_pixel_gbm"])].pivot_table(
+def bootstrap_vs_s07(per_case: pd.DataFrame, run: str, n_boot: int = 2000, ref: str = "s07_pixel_gbm") -> pd.DataFrame:
+    """The run against a reference (S07 by default) case by case, with 95% intervals from resampling whole split groups."""
+    both = per_case[per_case["run"].isin([run, ref])].pivot_table(
         index=["case", "split_group", "subset", "outer_fold"], columns="run",
         values=["r2", "mae", "n", "sum_t", "sum_t2", "sse"]).reset_index()
     rng = np.random.default_rng(0)
@@ -198,14 +198,14 @@ def bootstrap_vs_s07(per_case: pd.DataFrame, run: str, n_boot: int = 2000) -> pd
         stats = {name: [] for name in ("pooled_r2", "median_case_r2", "mean_mae")}
         for _ in range(n_boot):
             pick = sub.iloc[np.concatenate([rows_of[g] for g in rng.choice(groups, len(groups))])]
-            for name, value in _differences(pick, run).items():
+            for name, value in _differences(pick, run, ref).items():
                 stats[name].append(value)
-        point = _differences(sub, run)
+        point = _differences(sub, run, ref)
         for name in stats:
             lo, hi = np.percentile(stats[name], [2.5, 97.5])
             rows.append({"run": run, "subset": subset, "metric": name, "difference": point[name], "ci_low": lo,
-                         "ci_high": hi, "share_of_cases_better": _share_better(sub, run, name),
-                         "folds_better": _folds_better(sub, run, name)})
+                         "ci_high": hi, "share_of_cases_better": _share_better(sub, run, name, ref),
+                         "folds_better": _folds_better(sub, run, name, ref)})
     return pd.DataFrame(rows)
 
 
@@ -214,24 +214,23 @@ def _pooled(sub: pd.DataFrame, run: str) -> float:
     return float(1 - sse / (ss - s * s / n))
 
 
-def _differences(sub: pd.DataFrame, run: str) -> dict:
-    """Run minus S07: positive is better for R², negative is better for MAE."""
-    ref = "s07_pixel_gbm"
+def _differences(sub: pd.DataFrame, run: str, ref: str = "s07_pixel_gbm") -> dict:
+    """Run minus the reference: positive is better for R², negative is better for MAE."""
     return {"pooled_r2": _pooled(sub, run) - _pooled(sub, ref),
             "median_case_r2": float(sub[("r2", run)].median() - sub[("r2", ref)].median()),
             "mean_mae": float(sub[("mae", run)].mean() - sub[("mae", ref)].mean())}
 
 
-def _share_better(sub: pd.DataFrame, run: str, name: str) -> float:
+def _share_better(sub: pd.DataFrame, run: str, name: str, ref: str = "s07_pixel_gbm") -> float:
     if name == "mean_mae":
-        return float((sub[("mae", run)] < sub[("mae", "s07_pixel_gbm")]).mean())
-    return float((sub[("r2", run)] > sub[("r2", "s07_pixel_gbm")]).mean())
+        return float((sub[("mae", run)] < sub[("mae", ref)]).mean())
+    return float((sub[("r2", run)] > sub[("r2", ref)]).mean())
 
 
-def _folds_better(sub: pd.DataFrame, run: str, name: str) -> int:
+def _folds_better(sub: pd.DataFrame, run: str, name: str, ref: str = "s07_pixel_gbm") -> int:
     better = 0
     for _, fold in sub.groupby("outer_fold"):
-        diff = _differences(fold, run)[name]
+        diff = _differences(fold, run, ref)[name]
         better += int(diff < 0 if name == "mean_mae" else diff > 0)
     return better
 
