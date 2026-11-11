@@ -19,6 +19,7 @@ import pathlib
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 STAGE = REPO / "pipeline" / "S12_architecture_search"
@@ -35,7 +36,6 @@ MODEL_LABELS = {
 
 # Desired presentation order
 MODEL_ORDER = ["attn_unet", "res_unet", "fno"]
-BAR_COLORS = ["#2b5c8f", "#418ab3", "#d95f02"]
 
 
 def load_s11_ranges() -> tuple[tuple[float, float, float], tuple[float, float, float]]:
@@ -77,78 +77,76 @@ def main() -> None:
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     rows = load_s12_summary()
 
-    # Reorder according to MODEL_ORDER
-    row_by_model = {r["model"]: r for r in rows}
-    ordered_models = [m for m in MODEL_ORDER if m in row_by_model]
-    for m in row_by_model:
-        if m not in ordered_models:
-            ordered_models.append(m)
+    by_model_seed = {(r["model"], int(r["seed"])): r for r in rows}
+    seeds = sorted(list({int(r["seed"]) for r in rows}))
+    models = [m for m in MODEL_ORDER if any((m, s) in by_model_seed for s in seeds)]
 
-    labels = [MODEL_LABELS.get(m, m) for m in ordered_models]
-    pooled_r2 = [float(row_by_model[m]["pooled_r2"]) for m in ordered_models]
-    median_case_r2 = [float(row_by_model[m]["median_case_r2_all"]) for m in ordered_models]
+    labels = [MODEL_LABELS.get(m, m) for m in models]
+    x = np.arange(len(models))
 
     (s11_p_min, s11_p_max, s11_p_mean), (s11_m_min, s11_m_max, s11_m_mean) = load_s11_ranges()
 
-    fig, axes = plt.subplots(1, 2, figsize=(11, 5), sharey=False)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.5), sharey=False)
 
-    # Left panel: Pooled R2
-    ax1 = axes[0]
-    bars1 = ax1.bar(labels, pooled_r2, color=BAR_COLORS[:len(labels)], width=0.55, edgecolor="black", linewidth=0.8, zorder=3)
-    ax1.axhspan(
-        s11_p_min,
-        s11_p_max,
-        color="#2ca02c",
-        alpha=0.22,
-        label=f"S11 U-Net range [{s11_p_min:.4f}, {s11_p_max:.4f}]",
-        zorder=2,
-    )
-    ax1.axhline(s11_p_mean, color="#1b6e1b", linestyle="--", linewidth=1.2, label=f"S11 U-Net mean ({s11_p_mean:.4f})", zorder=2)
-    ax1.set_ylabel("Pooled $R^2$", fontsize=12)
-    ax1.set_title("Pooled $R^2$ across all 482 development cases", fontsize=13, fontweight="bold", pad=10)
-    ax1.set_ylim(0.0, 0.85)
-    ax1.grid(axis="y", linestyle=":", alpha=0.6, zorder=1)
-    ax1.legend(loc="lower right", fontsize=9, framealpha=0.9)
+    seed_colors = {
+        0: "#2b5c8f",
+        1: "#5c9ad6",
+        2: "#a6c8e0",
+    }
+    width = 0.35 if len(seeds) > 1 else 0.55
 
-    for bar, val in zip(bars1, pooled_r2):
-        ax1.text(
-            bar.get_x() + bar.get_width() / 2,
-            val + 0.015,
-            f"{val:.4f}",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-            fontweight="semibold",
+    for ax, metric_key, title, ylabel, s11_min, s11_max, s11_mean, ymax in [
+        (axes[0], "pooled_r2", "Pooled $R^2$ across all development cases", "Pooled $R^2$", s11_p_min, s11_p_max, s11_p_mean, 0.85),
+        (axes[1], "median_case_r2_all", "Median per-case $R^2$ (All cases)", "Median per-case $R^2$", s11_m_min, s11_m_max, s11_m_mean, 0.75),
+    ]:
+        ax.axhspan(
+            s11_min,
+            s11_max,
+            color="#2ca02c",
+            alpha=0.22,
+            label=f"S11 U-Net range [{s11_min:.4f}, {s11_max:.4f}]",
+            zorder=2,
         )
+        ax.axhline(s11_mean, color="#1b6e1b", linestyle="--", linewidth=1.2, label=f"S11 U-Net mean ({s11_mean:.4f})", zorder=2)
 
-    # Right panel: Median per-case R2 (all)
-    ax2 = axes[1]
-    bars2 = ax2.bar(labels, median_case_r2, color=BAR_COLORS[:len(labels)], width=0.55, edgecolor="black", linewidth=0.8, zorder=3)
-    ax2.axhspan(
-        s11_m_min,
-        s11_m_max,
-        color="#2ca02c",
-        alpha=0.22,
-        label=f"S11 U-Net range [{s11_m_min:.4f}, {s11_m_max:.4f}]",
-        zorder=2,
-    )
-    ax2.axhline(s11_m_mean, color="#1b6e1b", linestyle="--", linewidth=1.2, label=f"S11 U-Net mean ({s11_m_mean:.4f})", zorder=2)
-    ax2.set_ylabel("Median per-case $R^2$", fontsize=12)
-    ax2.set_title("Median per-case $R^2$ (All 482 cases)", fontsize=13, fontweight="bold", pad=10)
-    ax2.set_ylim(0.0, 0.75)
-    ax2.grid(axis="y", linestyle=":", alpha=0.6, zorder=1)
-    ax2.legend(loc="lower right", fontsize=9, framealpha=0.9)
+        for s_idx, s in enumerate(seeds):
+            offsets = (s_idx - (len(seeds) - 1) / 2) * width if len(seeds) > 1 else 0
+            vals = []
+            valid_x = []
+            for i, m in enumerate(models):
+                if (m, s) in by_model_seed:
+                    vals.append(float(by_model_seed[(m, s)][metric_key]))
+                    valid_x.append(x[i] + offsets)
 
-    for bar, val in zip(bars2, median_case_r2):
-        ax2.text(
-            bar.get_x() + bar.get_width() / 2,
-            val + 0.015,
-            f"{val:.4f}",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-            fontweight="semibold",
-        )
+            if vals:
+                bars = ax.bar(
+                    valid_x,
+                    vals,
+                    width=width * 0.88,
+                    color=seed_colors.get(s, "#7f7f7f"),
+                    label=f"Seed {s}",
+                    edgecolor="black",
+                    linewidth=0.8,
+                    zorder=3,
+                )
+                for bar, val in zip(bars, vals):
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        val + 0.012,
+                        f"{val:.4f}",
+                        ha="center",
+                        va="bottom",
+                        fontsize=8.5,
+                        fontweight="semibold",
+                    )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=11)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(title, fontsize=12, fontweight="bold", pad=10)
+        ax.set_ylim(0.0, ymax)
+        ax.grid(axis="y", linestyle=":", alpha=0.6, zorder=1)
+        ax.legend(loc="lower right", fontsize=8.5, framealpha=0.9)
 
     plt.suptitle("S12 Architecture Search vs. S11 Periodic U-Net Baseline", fontsize=14, fontweight="bold", y=1.00)
     plt.tight_layout()
