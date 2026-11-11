@@ -5,8 +5,8 @@ Asks where the S11 U-Net's remaining error lies, whether the Phase 1 tree models
 | | |
 | --- | --- |
 | Inputs | the S11 tuned predictions (`results/preds/s11_unet_tuned_seed{0,1,2}/`, not tracked), `pipeline/S11_unet_baseline/outputs/per_case_metrics.csv`, the S06c out-of-fold predictions, the S10 cache |
-| Outputs | `outputs/level_test.csv`, `outputs/error_anatomy.csv`, `outputs/fold0_screen.csv`, `outputs/convnext_diagnosis.csv`, `outputs/s13_unet_tuned_e200_seed0_summary.csv` and `_vs_s11.csv`; `outputs/runs/<exp_id>/fold<k>.json` and `.csv` |
-| Code | `s13_level_pattern.py`, `s13_fold0.py`, `convnext_diagnosis.py`, `s13_vs_s11.py`, `configs/`; `ConvNeXtUNet` in `src/urbanwind/dl/nets.py`; tests in `src/urbanwind/dl/tests/test_s13_*.py` |
+| Outputs | `outputs/level_test.csv`, `outputs/error_anatomy.csv`, `outputs/fold0_screen.csv`, `outputs/convnext_diagnosis.csv`, `outputs/s13_unet_tuned_e200_seed0_summary.csv` and `_vs_s11.csv`, `outputs/scale_test.csv`; `outputs/runs/<exp_id>/fold<k>.json` and `.csv` |
+| Code | `s13_level_pattern.py`, `s13_fold0.py`, `convnext_diagnosis.py`, `s13_vs_s11.py`, `s13_scale.py`, `configs/`; `ConvNeXtUNet` in `src/urbanwind/dl/nets.py`; tests in `src/urbanwind/dl/tests/test_s13_*.py` |
 
 Status: in progress. The level test, the error anatomy, the fold-0 screen, the ConvNeXt diagnosis and the five-fold run of the 200-epoch U-Net (seed 0) are complete.
 
@@ -100,6 +100,18 @@ Against S11 seed 0, which differs only in the schedule length, case by case with
 - Every interval comes from one training seed on each side, so it does not include the spread between seeds.
 - Fold 3 stopped early, at epoch 176, after 30 epochs without improvement; the others ran all 200 epochs, with their best epochs at 169 to 199.
 
+## 4. At what scale is the remaining error? (`s13_scale.py`, `outputs/scale_test.csv`)
+
+The networks predict every open-ground cell. Averaging both truth and prediction over square blocks before scoring shows where the error lives: fine detail and simulation noise would vanish quickly with the block size, while a street-scale pattern error would not.
+
+| Block size | Realistic pooled R², S11 seed 0 | Realistic pooled R², 200-epoch U-Net | Idealized pooled R², 200-epoch U-Net |
+| --- | --- | --- | --- |
+| 1 m (each cell) | 0.6768 | 0.6863 | 0.9489 |
+| 4 m | 0.6873 | 0.6960 | 0.9569 |
+| 16 m | 0.7149 | 0.7197 | 0.9715 |
+
+Even over 16 m blocks, about the size of a city block, the realistic R² rises by only about 0.03 to 0.04. The remaining error is in the street-scale pattern of cities the network has not seen, not in fine detail. (Idealized cases are stored at 0.5 m, so their 1 m row averages 2 × 2 cells.)
+
 ## Running it
 
 ```bash
@@ -108,6 +120,7 @@ uv run python -m urbanwind.dl.train --config pipeline/S13_hybrid/configs/convnex
 uv run python -m pipeline.S13_hybrid.s13_fold0               # scores every finished candidate on fold 0
 uv run python -m pipeline.S13_hybrid.convnext_diagnosis      # about 30 minutes on an Apple M-series GPU
 uv run python -m pipeline.S13_hybrid.s13_vs_s11              # needs all five folds of the candidate's predictions
+uv run python -m pipeline.S13_hybrid.s13_scale               # block-averaged R² of chosen runs
 ```
 
 The candidates were trained on Kaggle T4 GPUs with `pipeline/S11_unet_baseline/kaggle_runner.py`, and their fold-0 predictions rebuilt locally with `--repredict`.
