@@ -8,7 +8,7 @@ against S11 U-Net (resampling whole split_groups).
 
 Outputs:
 - outputs/summary.csv: Model comparison table across architectures and seeds.
-- outputs/vs_s11.csv: Group-bootstrap paired comparison (candidate minus S11 baseline).
+- outputs/vs_s11_seed1.csv: Group-bootstrap paired comparison (seed 1 candidates minus S11 baseline).
 - outputs/figures/ (learning curves and per-case scatter plots generated only from real results).
 
 Usage:
@@ -45,6 +45,7 @@ S11_BASELINE_RUN = "s11_unet_tuned_seed0"
 SUMMARY_COLUMNS = [
     "model",
     "seed",
+    "n_cases",
     "parameters",
     "gpu_minutes",
     "pooled_r2",
@@ -294,7 +295,7 @@ def main() -> None:
             print("Writing empty template summary.csv.")
             empty_summary = pd.DataFrame(columns=SUMMARY_COLUMNS)
             empty_summary.to_csv(OUT / "summary.csv", index=False)
-        print("Skipping vs_s11.csv: S12 prediction files (.npz) are required for paired bootstrap comparison and are not present.")
+        print("Skipping vs_s11_seed1.csv: S12 prediction files (.npz) are required for paired bootstrap comparison and are not present.")
         return
 
     # When completed runs exist:
@@ -345,6 +346,7 @@ def main() -> None:
         summary_rows.append({
             "model": model_name,
             "seed": seed,
+            "n_cases": len(sub_all),
             "parameters": param_count,
             "gpu_minutes": round(gpu_minutes, 1),
             "pooled_r2": round(pooled_r2(sub_all), 4),
@@ -369,13 +371,13 @@ def main() -> None:
             vs_df = bootstrap_vs_s11(per_case, run, S11_BASELINE_RUN)
             vs_rows.append(vs_df)
         all_vs = pd.concat(vs_rows, ignore_index=True)
-        all_vs.to_csv(OUT / "vs_s11.csv", index=False, float_format="%.4f")
+        all_vs.to_csv(OUT / "vs_s11_seed1.csv", index=False, float_format="%.4f")
         print("\n" + "=" * 80)
-        print("S12 VS S11 GROUP-BOOTSTRAP COMPARISON")
+        print("S12 VS S11 GROUP-BOOTSTRAP COMPARISON (SEED 1)")
         print("=" * 80)
         print(all_vs.to_string(index=False))
     else:
-        print("Skipping vs_s11.csv: S11 baseline reference metrics could not be loaded.")
+        print("Skipping vs_s11_seed1.csv: S11 baseline reference metrics could not be loaded.")
 
     plot_learning_curves_if_available(runs)
 

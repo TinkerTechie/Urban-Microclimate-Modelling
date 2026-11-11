@@ -5,7 +5,7 @@ Tests whether alternative deep-learning architectures predict the pedestrian-lev
 | | |
 | --- | --- |
 | **Inputs** | S10 cache (`data/processed/dl/`), `data/splits.json`, S11 baseline weights / predictions |
-| **Outputs** | `configs/` (`res_unet.yaml`, `attn_unet.yaml`, `fno.yaml`); `overfit_check_<model>.json`; `outputs/summary.csv`, `outputs/vs_s11.csv`, figures; `kaggle_jobs.json` |
+| **Outputs** | `configs/` (`res_unet.yaml`, `attn_unet.yaml`, `fno.yaml`); `overfit_check_<model>.json`; `outputs/summary.csv`, `outputs/vs_s11_seed1.csv`, figures; `kaggle_jobs.json` |
 | **Code** | `src/urbanwind/dl/nets.py` (added `ResBlock`, `ResUNet`, `AttentionGate`, `AttnUNet`, `SpectralBlock`, `FNO`); tests in `src/urbanwind/dl/tests/test_s12_nets.py`; stage scripts `param_counts.py`, `overfit_check.py`, `s12_results.py` |
 
 ---
@@ -98,7 +98,7 @@ uv run python -m urbanwind.dl.train --config pipeline/S12_architecture_search/co
 ### Scoring and Comparison Tooling
 Once training completes:
 ```bash
-# Score finished runs and generate outputs/summary.csv and outputs/vs_s11.csv
+# Score finished runs and generate outputs/summary.csv and outputs/vs_s11_seed1.csv
 uv run python pipeline/S12_architecture_search/s12_results.py
 
 # Plot visual comparison between S12 candidates and S11 baseline range
@@ -111,7 +111,7 @@ uv run python pipeline/S12_architecture_search/plot_comparison.py
 
 All candidate architectures were trained under the equal-budget protocol (section 2) across 5 outer cross-validation folds. Seed 0 was evaluated for all 3 architectures (`attn_unet`, `res_unet`, `fno`). Multi-seed confirmation (seed 1) was subsequently executed for the top two performing candidates (`attn_unet` and `res_unet`). All evaluations were scored on the development set through `urbanwind.evaluate`. Raw numbers: `outputs/summary.csv`.
 
-The S11 rows are copied from `pipeline/S11_unet_baseline/outputs/summary.csv` (grouped split) and GPU minutes represent the sum of the fold training durations.
+Reading the table: Every row covers all 482 development cases (190 idealized, 292 realistic). The S11 rows are copied from `pipeline/S11_unet_baseline/outputs/summary.csv` (grouped split) and GPU minutes represent the sum of the fold training durations.
 
 | Model | Seed | Parameters | GPU minutes | Pooled $R^2$ | Median per-case $R^2$ (all) | Median per-case $R^2$ (idealized) | Median per-case $R^2$ (realistic) | Mean $\Delta P_{95}$ | Inference s / case |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -124,9 +124,20 @@ The S11 rows are copied from `pipeline/S11_unet_baseline/outputs/summary.csv` (g
 | Res-U-Net | 1 | 5,057,377 | 354.7 | 0.6710 | 0.5302 | 0.5966 | 0.5031 | −0.6989 | 0.0539 |
 | FNO | 0 | 4,728,337 | 251.1 | 0.5578 | 0.3552 | 0.3808 | 0.3434 | −0.6099 | 0.0245 |
 
+### Multi-Seed Aggregate Summary
+
+| Model | Seeds | Pooled $R^2$ mean (range) | Median case $R^2$ all (mean) | Mean $\Delta P_{95}$ (mean) |
+| --- | :---: | :---: | :---: | :---: |
+| Attention U-Net | 2 | 0.6862 (0.6786–0.6937) | 0.5275 | −0.4847 |
+| Res-U-Net | 2 | 0.6770 (0.6710–0.6830) | 0.5295 | −0.6861 |
+| FNO | 1 (seed 0) | 0.5578 | 0.3552 | −0.6099 |
+| S11 tuned U-Net (ref) | 3 | 0.709–0.712 (0.7108) | about 0.566 (seed 0: 0.5662, seed 1: 0.5597, seed 2: 0.5953; mean 0.5737) | −0.4508 (−0.4571 to −0.4385) |
+
+*Inference seconds per case differ between seeds (0.0442 vs 0.0661 for Attention U-Net) because the sessions used different GPUs, so timing is only a rough guide.*
+
 ### S12 vs S11 Group-Bootstrap Comparison (Seed 1)
 
-Paired group-bootstrap comparisons were conducted against `s11_unet_tuned_seed0` using 2,000 cluster bootstrap resamples across whole `split_group` units. Results are saved in `outputs/vs_s11.csv` and `outputs/vs_s11_seed1.csv`:
+Paired group-bootstrap comparisons were conducted against `s11_unet_tuned_seed0` using 2,000 cluster bootstrap resamples across whole `split_group` units. Results are saved in `outputs/vs_s11_seed1.csv` (seed 1 only):
 
 | Model (Seed 1) | Subset | Metric | Difference vs S11 | 95% Bootstrap CI | Share Cases Better | Folds Better (of 5) |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -153,18 +164,20 @@ Paired group-bootstrap comparisons were conducted against `s11_unet_tuned_seed0`
 
 ### Analysis & Key Findings
 
-- **Statistical Significance of S11 Superiority:** In the paired group-bootstrap comparison on Seed 1, every 95% bootstrap confidence interval for pooled $R^2$ and median per-case $R^2$ is strictly below zero across `all`, `idealized`, and `realistic` subsets for both Attention U-Net and Res-U-Net. This demonstrates that S11's performance advantage is statistically significant and not an artifact of test sample fluctuations.
+- **Paired Group-Bootstrap Comparison (Seed 1):** In the paired group-bootstrap comparison on Seed 1, the paired group-bootstrap 95% intervals exclude zero for both models (seed 1, resampling cases by split group, against a single S11 seed). Note that the Attention U-Net pooled $R^2$ interval vs S11 reaches −0.0037, close to zero.
 - **Low Case-Level Win Rates:** Attention U-Net improves upon S11 on only 29.05% of development cases (140/482), while Res-U-Net improves on only 25.52% (123/482). S11 outperforms both candidates on $> 70\%$ of cases.
+- **Seed Spread:** S12 seed spread in pooled $R^2$ is 0.015 (Attention U-Net: 0.6937 vs 0.6786) and 0.012 (Res-U-Net: 0.6830 vs 0.6710), against about 0.003 for S11, so these models are less stable across seeds than S11.
 - **Consistent Seed 1 Replication:** Across both seeds 0 and 1, Attention U-Net and Res-U-Net maintain median per-case $R^2 \approx 0.526\text{--}0.530$, well below S11's three-seed range ($0.560\text{--}0.595$). Pooled $R^2$ for seed 1 (0.679 for Attention U-Net, 0.671 for Res-U-Net) dropped slightly compared to seed 0 (0.694 and 0.683), confirming that neither candidate matches S11's pooled $R^2$ ($0.709\text{--}0.712$).
 - **High-Speed Tail Deficit:** Every model exhibits negative $\Delta P_{95}$, under-predicting extreme wind speeds. However, the deficit is markedly more severe in Res-U-Net ($\Delta P_{95} \approx -0.673$ in seed 0, $-0.699$ in seed 1) than in Attention U-Net ($-0.481$ to $-0.488$) or S11 ($-0.439$ to $-0.457$).
 - **FNO Limitations:** The FNO remains the lowest performing architecture (pooled $R^2 = 0.558$, median per-case $R^2 = 0.355$). While fast (251 GPU minutes, 0.0245 s/case), its global frequency mode representation struggles with sharp building discontinuities.
 
 ### Status of Multi-Seed Confirmation & Seed 2
 
-The experimental protocol in `kaggle_jobs.json` outlines a 3-seed confirmation schedule (seeds 0, 1, 2) for the two top architectures. Seed 2 has **not yet been started** for the following reasons:
+The experimental protocol in `kaggle_jobs.json` outlines a 3-seed confirmation schedule (seeds 0, 1, 2) for the two top architectures. Seed 2 has **not yet been started**:
 1. **Consistent Negative Result Across Multiple Seeds:** Both seed 0 and seed 1 independently demonstrate that neither Attention U-Net nor Res-U-Net outperforms the baseline S11 periodic U-Net on any headline metric.
-2. **Definitive Bootstrap Confirmation:** The 95% bootstrap confidence intervals for seed 1 exclude zero across all primary metrics and subsets, confirming statistical significance.
-3. **Safe Checkpointing and Resource Management:** Running seed 2 would require an additional ~760 GPU minutes (~12.7 GPU hours). Publishing and consolidating seed 1 enables the team to evaluate whether further GPU budget is warranted or whether the negative result is already conclusive.
+2. **Bootstrap Comparison (Seed 1):** The paired group-bootstrap 95% intervals exclude zero for both models (seed 1, resampling cases by split group, against a single S11 seed), though the Attention U-Net pooled $R^2$ interval reaches −0.0037, close to zero.
+
+Seed 2 would cost about 12.7 GPU hours (about 760 GPU minutes).
 
 ---
 
@@ -182,6 +195,6 @@ At least three architectures compared under equal budgets. Either the winner bea
 2. **Wavelength tiling trade-off:** While 256×256 tiled inference preserves physical wavelength interpretation for FNO, it prevents the model from exploiting global cross-neighbourhood low-frequency modes across multi-kilometer domains in a single pass.
 3. **Multi-seed confirmation status:** FNO was evaluated on seed 0 only. Attention U-Net and Res-U-Net have completed seeds 0 and 1; seed 2 has not yet been executed.
 4. **FNO numeric precision (`amp: false`):** The FNO was trained with `amp: false`, because fp16 `GradScaler` cannot unscale complex gradients. The other models used AMP, so numeric precision is not identical.
-5. **Seed 0 recovered cases (387) vs. Seed 1 complete evaluation (482):** In seed 0, 387 prediction cases were recovered and consolidated from distributed runs across Kaggle and Colab T4 nodes, whereas Seed 1 completed full 5-fold cross-validation with all 482 development cases evaluated and scored.
+5. **Seed 0 was trained across Kaggle and Colab.** Folds 0-3 ran on Kaggle and fold 4 on Colab. The final seed-0 scoring covers all 482 development cases. A seed-0 group-bootstrap vs S11 was not produced because the seed-0 predictions live on a different machine than the scoring environment.
 6. **Approximate GPU minutes and resumed fold 4:** GPU minutes are approximate: folds ran on Kaggle and Colab T4 GPUs, two jobs shared a node on Kaggle, and resumed folds count only the minutes of the final segment. Fold 4 of seed 0 was resumed from checkpoints created on a different machine (same code and configuration).
 7. **Inference time benchmarking:** Inference time was measured on a single GPU model in one session and is only comparable among the S12 rows.
