@@ -5,10 +5,10 @@ Asks where the S11 U-Net's remaining error lies, whether the Phase 1 tree models
 | | |
 | --- | --- |
 | Inputs | the S11 tuned predictions (`results/preds/s11_unet_tuned_seed{0,1,2}/`, not tracked), `pipeline/S11_unet_baseline/outputs/per_case_metrics.csv`, the S06c out-of-fold predictions, the S10 cache |
-| Outputs | `outputs/level_test.csv`, `outputs/error_anatomy.csv`, `outputs/fold0_screen.csv`, `outputs/convnext_diagnosis.csv`, `outputs/s13_unet_tuned_e200_seed0_summary.csv` and `_vs_s11.csv`, `outputs/scale_test.csv`; `outputs/runs/<exp_id>/fold<k>.json` and `.csv` |
-| Code | `s13_level_pattern.py`, `s13_fold0.py`, `convnext_diagnosis.py`, `s13_vs_s11.py`, `s13_scale.py`, `configs/`; `ConvNeXtUNet` in `src/urbanwind/dl/nets.py`; tests in `src/urbanwind/dl/tests/test_s13_*.py` |
+| Outputs | `outputs/level_test.csv`, `outputs/error_anatomy.csv`, `outputs/fold0_screen.csv`, `outputs/convnext_diagnosis.csv`, `outputs/s13_unet_tuned_e200_seed0_summary.csv` and `_vs_s11.csv`, `outputs/scale_test.csv`, `outputs/final_summary.csv`, `outputs/final_vs_s11.csv`; `outputs/runs/<exp_id>/fold<k>.json` and `.csv` |
+| Code | `s13_level_pattern.py`, `s13_fold0.py`, `convnext_diagnosis.py`, `s13_vs_s11.py`, `s13_scale.py`, `s13_final.py`, `configs/`; `ConvNeXtUNet` in `src/urbanwind/dl/nets.py`; tests in `src/urbanwind/dl/tests/test_s13_*.py` |
 
-Status: in progress. The level test, the error anatomy, the fold-0 screen, the ConvNeXt diagnosis and the five-fold run of the 200-epoch U-Net (seed 0) are complete.
+Status: the network experiments are complete. The level test, the error anatomy, the fold-0 screen, the ConvNeXt diagnosis, the scale test, and three seeds of the 200-epoch U-Net over all five folds are done.
 
 ## 1. Where the S11 error is (`s13_level_pattern.py`)
 
@@ -97,10 +97,34 @@ Against S11 seed 0, which differs only in the schedule length, case by case with
 
 - The longer schedule beats every S11 seed on pooled R², median per-case R², mean MAE and mean ΔP95. On its own it matches the pooled R² of the three S11 seeds averaged (0.7194, `outputs/level_test.csv`).
 - The gain is largest on the idealized layouts. On the realistic cities it is smaller, and its pooled-R² interval only just excludes zero.
-- Every interval comes from one training seed on each side, so it does not include the spread between seeds.
+- These intervals come from one training seed on each side; section 4 adds the other two seeds.
 - Fold 3 stopped early, at epoch 176, after 30 epochs without improvement; the others ran all 200 epochs, with their best epochs at 169 to 199.
 
-## 4. At what scale is the remaining error? (`s13_scale.py`, `outputs/scale_test.csv`)
+## 4. Final: three seeds of the 200-epoch U-Net (`s13_final.py`)
+
+Seeds 1 and 2 of `unet_tuned_e200` were trained on all five folds as well. Each seed beats the S11 run with the same seed on pooled R², median per-case R² and mean MAE, with intervals that exclude zero (`outputs/s13_unet_tuned_e200_seed{0,1,2}_vs_s11.csv`).
+
+The three seeds of each recipe are averaged cell by cell (`outputs/final_summary.csv`):
+
+| Model | Pooled R² | Median per-case R² | Mean MAE (u*) | Mean ΔP95 (u*) | Realistic pooled R² | Realistic median per-case R² |
+| --- | --- | --- | --- | --- | --- | --- |
+| S11 tuned U-Net, seeds 0, 1, 2 | 0.7092, 0.7122, 0.7111 | 0.5662, 0.5597, 0.5953 | 0.4856, 0.4840, 0.4720 | -0.4571, -0.4569, -0.4385 | 0.6768, 0.6799, 0.6776 | 0.5234, 0.5227, 0.5437 |
+| S11 tuned U-Net, mean of 3 seeds | 0.7194 | 0.5896 | 0.4728 | -0.4634 | 0.6874 | 0.5419 |
+| 200-epoch U-Net, seeds 0, 1, 2 | 0.7193, 0.7282, 0.7223 | 0.6016, 0.6072, 0.6239 | 0.4641, 0.4589, 0.4547 | -0.4127, -0.4020, -0.3839 | 0.6863, 0.6961, 0.6891 | 0.5457, 0.5597, 0.5635 |
+| **200-epoch U-Net, mean of 3 seeds** | **0.7339** | **0.6288** | **0.4502** | **-0.4149** | **0.7023** | **0.5731** |
+
+The two ensembles case by case, with 95% intervals from 2,000 resamples of whole cities and layout families (`outputs/final_vs_s11.csv`):
+
+| Subset | Pooled R² | Median per-case R² | Mean MAE (u*) | Cases with higher R² | Folds better |
+| --- | --- | --- | --- | --- | --- |
+| All | +0.0145 [0.0071, 0.0241] | +0.0392 [0.0275, 0.0619] | -0.0226 [-0.0294, -0.0172] | 86% | 5 of 5 |
+| Idealized | +0.0118 [0.0092, 0.0175] | +0.0754 [0.0403, 0.0995] | -0.0361 [-0.0449, -0.0298] | 97% | 5 of 5 |
+| Realistic | +0.0149 [0.0065, 0.0258] | +0.0311 [0.0146, 0.0440] | -0.0138 [-0.0205, -0.0082] | 78% | 5 of 5 |
+
+- The longer schedule is a consistent gain: every seed of the 200-epoch U-Net scores above every S11 seed, and the ensembles differ on every measure and every fold.
+- The three-seed mean of the 200-epoch U-Net is the strongest model on the development set. The frozen test set has not been read.
+
+## 5. At what scale is the remaining error? (`s13_scale.py`, `outputs/scale_test.csv`)
 
 The networks predict every open-ground cell. Averaging both truth and prediction over square blocks before scoring shows where the error lives: fine detail and simulation noise would vanish quickly with the block size, while a street-scale pattern error would not.
 
@@ -121,6 +145,7 @@ uv run python -m pipeline.S13_hybrid.s13_fold0               # scores every fini
 uv run python -m pipeline.S13_hybrid.convnext_diagnosis      # about 30 minutes on an Apple M-series GPU
 uv run python -m pipeline.S13_hybrid.s13_vs_s11              # needs all five folds of the candidate's predictions
 uv run python -m pipeline.S13_hybrid.s13_scale               # block-averaged R² of chosen runs
+uv run python -m pipeline.S13_hybrid.s13_final               # the three-seed ensembles; needs every seed's predictions
 ```
 
 The candidates were trained on Kaggle T4 GPUs with `pipeline/S11_unet_baseline/kaggle_runner.py`, and their fold-0 predictions rebuilt locally with `--repredict`.
