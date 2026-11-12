@@ -98,8 +98,9 @@ def run_queue(jobs: list, gpus: int, logs: pathlib.Path) -> dict:
 
 def save_outputs(summary: dict) -> None:
     out = WORK / "s11_final"
-    for src, dst in ((REPO / "pipeline" / "S11_unet_baseline" / "outputs" / "runs", out / "runs"),
-                     (REPO / "results" / "checkpoints", out / "checkpoints")):
+    # every stage's run records (each config names its own out_dir), then the weights
+    sources = [(runs, out / "runs") for runs in sorted(REPO.glob("pipeline/*/outputs/runs"))]
+    for src, dst in (*sources, (REPO / "results" / "checkpoints", out / "checkpoints")):
         if src.exists():
             # finished folds have already deleted their resume files; an unfinished fold keeps its own
             shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("*.tmp"))
